@@ -50,7 +50,8 @@ class Orchestrator:
     async def run_directive(self, directive: str, *, user_email: str, user_role: str,
                             preferred_agents: list[str] | None = None,
                             all_agents: bool = False,
-                            sensitivity: str = "internal") -> dict:
+                            sensitivity: str = "internal",
+                            consulting: bool = False) -> dict:
         trace = uuid.uuid4().hex[:8]
         t0 = time.time()
         session = sessions.start("swarm", directive, trace, requested_by=user_role,
@@ -105,12 +106,12 @@ class Orchestrator:
                                   user_role=user_role, sensitivity=sensitivity)
 
         # 3. SYNTH — skip the extra LLM call when a single agent already answered
-        if len(results) == 1:
+        if len(results) == 1 and not consulting:
             final = results[0].output
             await bus.emit("system", "orchestrator", "single agent — synthesis skipped", trace=trace)
         else:
             final = await self._synthesize(directive, results, trace, user_email, user_role,
-                                           sensitivity)
+                                           sensitivity, consulting=consulting)
 
         # 4. PERSIST — off the event loop (sync file write + Obsidian REST push, F3)
         note_path = await asyncio.to_thread(write_deliverable, directive, final, user_role,
@@ -137,7 +138,7 @@ class Orchestrator:
             asyncio.create_task(hermes.observe(directive=directive, deliverable=final,
                                                agents=[r.role for r in results], trace=trace,
                                                sensitivity=effective_sensitivity))
-        return {
+        response = {
             "trace": trace,
             "directive": directive,
             "plan": plan,
@@ -147,6 +148,9 @@ class Orchestrator:
             "vault_note": note_path,
             "elapsed": round(elapsed, 2),
         }
+        if consulting:
+            response["method"] = "Listen → Shape → Deliver"
+        return response
 
     async def run_single_agent(self, agent_key: str, task: str, *, user_role: str,
                                user_id: str = "", sensitivity: str = "internal") -> dict:
@@ -224,12 +228,17 @@ class Orchestrator:
         return picked[:3]
 
     async def _synthesize(self, directive, results, trace, user_id="", user_role="",
-                          sensitivity="internal"):
+                          sensitivity="internal", consulting=False):
         synth = registry.spawn("synth", trace=trace)
         joined = "\n\n".join(f"## {r.role} ({r.agent_id})\n{r.output}" for r in results)
+        output_format = (
+            "Preserve the exact sections ## Listen, ## Shape, and ## Deliver; "
+            "keep evidence distinct from assumptions."
+            if consulting else "Merge the outputs into one coherent deliverable."
+        )
         prompt = (f"{UNTRUSTED_DATA_POLICY}\n\nOriginal directive: {directive}\n\n"
                   f"Agent outputs:\n{joined}\n\n"
-                  f"Merge into one deliverable for a human.")
+                  f"{output_format} Finish with a human-review checklist.")
         order = ("public", "internal", "confidential", "restricted")
         effective = max([sensitivity, *(r.sensitivity for r in results)],
                         key=order.index)

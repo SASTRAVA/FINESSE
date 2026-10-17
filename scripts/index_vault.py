@@ -117,7 +117,11 @@ async def main(argv=None):
     if batch_texts:
         await store.upsert(batch_texts, batch_meta)
         total += len(batch_texts)
-    print(f"\n[index] done. {total} chunks in the brain ({store.backend_name()}).")
+    from engine.knowledge.indexing import index_public_catalog
+    public_total = await index_public_catalog(store)
+    total += public_total
+    print(f"\n[index] done. {total} chunks in the brain "
+          f"({store.backend_name()}); {public_total} from public SASTRAVA knowledge.")
 
 
 if __name__ == "__main__":

@@ -45,6 +45,7 @@ class Lead:
     outreach_draft: str = ""
     outreach_status: str = "none"   # none | draft | approved | sent
     owner: str = ""             # employee who owns the lead
+    service_lines: list[str] = field(default_factory=list)
     created: float = field(default_factory=time.time)
 
     def label(self) -> str:
@@ -111,12 +112,18 @@ class CRM:
     def _write_note(self, l: Lead):
         _LEADS.mkdir(parents=True, exist_ok=True)
         note = _LEADS / f"{_slug(l.label())}__{l.id}.md"
+        service_tags = ", ".join(
+            f"sastrava_{re.sub(r'[^a-z0-9_]+', '', line.lower())}"
+            for line in l.service_lines if line)
+        tags = ", ".join(
+            tag for tag in ("lead", "crm", l.status, service_tags) if tag)
         fm = ("---\n"
               f"type: lead\nid: {l.id}\ncompany: {l.company}\nname: {l.name}\n"
               f"title: {l.title}\nlocation: {l.location}\nindustry: {l.industry}\n"
               f"fit_score: {l.fit_score}\nstatus: {l.status}\nsource: {l.source}\n"
               f"owner: {l.owner}\noutreach_status: {l.outreach_status}\n"
-              f"tags: [lead, crm, {l.status}]\n---\n\n")
+              f"service_lines: [{', '.join(l.service_lines)}]\n"
+              f"tags: [{tags}]\n---\n\n")
         body = (
             f"# {l.label()}\n\n"
             f"**Location:** [[{l.location or 'Unknown'}]] · **Industry:** {l.industry or '—'} · "

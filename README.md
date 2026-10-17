@@ -21,11 +21,51 @@ orchestrator, a FastAPI service, and browser dashboards.
 - Provides a FastAPI API, a JARVIS-style browser interface, and a live event
   stream.
 - Keeps external write tools behind an explicit approval step.
+- Provides SASTRAVA service catalogs, six lane-scoped consulting specialists,
+  public website/GitHub knowledge sync, and Listen → Shape → Deliver workflows.
 
 The normal runtime does **not** train model weights. Its "learning" is RAG:
 it stores selected text in the vector database for later retrieval. Separate
 QLoRA scripts and a notebook provide an optional, manually operated training
 workflow; they are not automatically run or deployed by the app.
+
+## SASTRAVA consulting workflows
+
+The consulting layer organizes work around six public service lines:
+strategy and incubation, AI and automation, software delivery, cybersecurity,
+digital growth, and digital learning. Workflow responses separate discovery
+(`Listen`), a bounded approach (`Shape`), and a reviewable plan (`Deliver`);
+they distinguish evidence from assumptions and do not promise outcomes.
+
+After authentication, the UI offers consulting entry points from the main
+dashboard and executive command page. The API also exposes:
+
+- `GET /api/sastrava/catalog` — public services, pillars, playbooks, and
+  sanitized source catalogs.
+- `POST /api/sastrava/intake` — lane-checked service-line intake and planning.
+- `POST /api/sastrava/security-scope` — security scoping; requires a security
+  permission and an explicit authorization attestation. It does not execute
+  tests or scans.
+- `POST /api/sastrava/learning-plan` — audience-led learning plan generation.
+
+The CRM tags leads with validated service-line identifiers. Outreach remains
+human-approved.
+
+Sync public knowledge into the sanitized, tracked catalog and local RAG store:
+
+```powershell
+python scripts/sync_sastrava_site.py
+python scripts/sync_sastrava_github.py
+```
+
+The website sync is constrained to `sastrava.com` and its sitemap (with a
+small fallback URL list). The GitHub sync reads only repositories explicitly
+marked public under the SASTRAVA account, excludes `FINESSE`, and stores only
+sanitized repository summaries rather than cloning source code. Both syncs
+redact credentials, contact details, and local paths before writing tracked
+catalog files. Add `--no-index` to refresh the files without changing vectors.
+The bundled playbooks are indexed with `lane=general` and `sensitivity=public`;
+indexing does not copy these resources into the private vault.
 
 ## How a request flows
 
@@ -128,6 +168,8 @@ python run.py --index --purge-legacy
 
 The indexer flags are mutually exclusive. `--audit-only` reports a count and
 exits; `--purge-legacy` removes the flagged points, then proceeds with indexing.
+Indexing also adds the bundled SASTRAVA playbooks and any generated public
+catalogs to RAG; those sources are tagged `general` and `public`.
 
 Start FINESSE:
 
@@ -165,8 +207,10 @@ local testing, not production accounts.
 | `engine/llm/` | Hosted/local model routing, retries, cache and concurrency bounds |
 | `engine/mcp/` | Lane-aware tools and approval gate for write tools |
 | `engine/prompt_guard.py` | Untrusted-content wrapping and injection-pattern detection |
+| `engine/knowledge/` | Sanitized public catalogs, SASTRAVA service lines, and playbooks |
+| `engine/sastrava/` | Consulting workflow construction and service-line routing |
 | `engine/web/` | Browser dashboard pages and bundled Hub UI |
-| `scripts/` | Vault indexing and local demo-user utilities |
+| `scripts/` | Vault indexing, public-source sync, and local demo-user utilities |
 | `training/` | Optional dataset export and QLoRA workflows |
 | `voice/` | Optional standalone voice client |
 

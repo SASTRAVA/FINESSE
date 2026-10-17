@@ -71,8 +71,10 @@ lane from the server-side dispatcher, not from the model.
 - Qdrant runs embedded on disk by default. Server mode can be configured with
   `QDRANT_URL`; secure that service separately.
 - `python run.py --index` reads Markdown files from the configured vault and
-  stores chunk vectors, lane, and sensitivity metadata. Re-index after
-  upgrading; old chunks without those fields fail closed.
+  stores chunk vectors, lane, and sensitivity metadata. It also indexes the
+  bundled SASTRAVA playbooks and generated public catalogs as `general` /
+  `public`. Re-index after upgrading; old chunks without those fields fail
+  closed.
 
 ### 4. Model inference and agent execution
 
@@ -89,9 +91,9 @@ Before provider calls, `engine/llm/provider.py` redacts recognized API-key and
 Bearer-token patterns, and optionally masks email/phone PII. Callers propagate
 RAG sensitivity; confidential/restricted prompts route only to a configured
 local endpoint by default, otherwise raising `DataEgressBlocked` before the
-network call. `ALLOW_CONFIDENTIAL_EXTERNAL_EGRESS=true` is an explicit policy
-override, not a recommended production default. This completion-provider
-control does not yet govern optional hosted embeddings or TTS.
+network call. Hosted embedding and TTS requests use the same secret/PII
+scrubber and confidential-egress policy. `ALLOW_CONFIDENTIAL_EXTERNAL_EGRESS=true`
+is an explicit policy override, not a recommended production default.
 
 Agents have role-specific system prompts, model roles, token limits, and
 optional tool access. Agentic agents can request tools for a bounded number of
@@ -134,6 +136,33 @@ TTS provider. Hosted LLM, embedding, and TTS providers may receive user text,
 retrieved context, or generated speech text. A local embedding model alone
 does not keep LLM prompts local.
 
+### 7. Public SASTRAVA knowledge and consulting workflow
+
+`scripts/sync_sastrava_site.py` reads the SASTRAVA sitemap plus a short fallback
+URL list and only fetches HTTPS pages on the approved `sastrava.com` hosts.
+`scripts/sync_sastrava_github.py` checks the GitHub API's `private` flag before
+reading any README, accepts only public repositories owned by SASTRAVA, and
+excludes the FINESSE repository itself. Both scripts sanitize credential
+patterns, email/phone details, and local paths before saving their generated
+catalogs under `engine/knowledge/`. Catalog indexing uses the `general` lane
+and `public` sensitivity; the retrieval layer still wraps non-memory sources
+as untrusted data.
+
+Six built-in specialists cover strategy/incubation, AI automation, software
+delivery, cybersecurity scoping, digital growth, and digital learning. Their
+lanes are the existing RBAC lanes rather than new clearance levels.
+Authenticated `/api/sastrava/*` routes expose the catalog, lane-checked client
+intake, authorized security scoping, and learning plans. The orchestrator
+preserves caller sensitivity and returns consulting work in the
+Listen → Shape → Deliver format. Security scoping requires an explicit
+requester attestation and does not perform scans or testing. CRM lead records
+carry validated service-line tags; outreach remains human-approved.
+
+This content is a sanitized public-source snapshot, not an authoritative or
+continuously current statement of company policy. Operators should review
+changes before refreshing the RAG index; client-specific facts and confidential
+data must not be written into the public catalog.
+
 ## Findings and required changes
 
 | ID | Severity | State | Finding / impact | Evidence and recommended action |
@@ -158,6 +187,7 @@ does not keep LLM prompts local.
 | M-6 | **MEDIUM** | Open | The optional training guide reports very small per-lane example counts; small or low-quality datasets can overfit or encode sensitive data. | Review/consent and de-identify training data, keep data out of Git, add held-out evaluation, and document model/license provenance. |
 | M-7 | **MEDIUM** | Open | A compressed Office document can expand substantially during parsing even when its uploaded size is within the 10 MiB limit. PDF page counts and spreadsheet rows are not separately bounded. | Parse untrusted documents in a resource-limited worker; enforce page/row/expanded-size limits and reject malformed or unusually large archives. |
 | M-8 | **MEDIUM** | **Remediated** | Hosted embedding and TTS clients were outside credential/PII scrubbing and confidential-data egress controls. | `engine/llm/provider.py` exposes shared scrubbing and egress-policy helpers. `engine/rag/embeddings.py` scrubs hosted requests and routes confidential/restricted embedding to deterministic offline hash generation, avoiding hosted requests and model downloads; `engine/rag/store.py` passes chunk sensitivity into embedding calls and conservatively treats search queries as confidential. `engine/main.py` carries sensitivity resolved by JARVIS/RAG into dashboard TTS requests; `engine/voice_tts.py` scrubs external speech text, defaults omitted classifications to confidential, and blocks confidential/restricted cloud speech unless the explicit egress override is set. |
+| M-9 | **MEDIUM** | **Partially mitigated** | Public company and portfolio information can become stale or be misinterpreted when used as consulting context. | The constrained sync scripts save sanitized website and public-repository summaries under `engine/knowledge/`; the indexer labels them public/general and retrieval treats external chunks as untrusted. Add a periodic owner review, freshness tracking, and source-level approval before treating catalog text as policy or client-specific evidence. |
 | L-1 | **LOW** | Open | `TurboQuant` is the name of a concurrency/cache layer here; it does not quantize the completion model. The performance language can be mistaken for a measured quantization or throughput result. | Describe it as bounded serving/caching, report actual backend quantization separately, and publish benchmarks before making capacity claims. |
 | L-2 | **LOW** | Open | No project license is present. A public repository without a license does not grant general reuse rights. | Select and add a license only after the owner decides the intended reuse terms. |
 | L-3 | **LOW** | Open | WebSocket authentication uses a query parameter because browser WebSocket APIs cannot set a normal Authorization header. Reverse proxies may log URLs. | Ensure query strings are redacted from logs; consider a short-lived, single-use WebSocket ticket or a secure cookie once HTTPS is deployed. |

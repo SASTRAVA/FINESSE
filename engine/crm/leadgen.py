@@ -11,15 +11,19 @@ import re
 
 from ..llm import llm
 from ..mcp import mcp
+from ..knowledge.sastrava import SERVICES, infer_service_lines
 from ..orchestra.events import bus
 from .leads import crm, Lead
 
 _SYS = ("You are Sastrava's Lead Generation Agent. From the provided web results and brain "
         "context, extract REAL potential B2B leads for the given ICP and location. For each, "
         "infer the likely business NEED we can serve and score product-market FIT 0..1. "
+        "Classify each need using only these service_line IDs: strategy_consulting, ai_automation, "
+        "software_delivery, cybersecurity, digital_growth, digital_learning. "
         "Also write a short, warm, human outreach draft (3-4 sentences, no spam). "
         "Return ONLY JSON: {\"leads\":[{\"company\":..,\"name\":..,\"title\":..,\"location\":..,"
-        "\"industry\":..,\"need\":..,\"fit_score\":0.0,\"contact\":..,\"outreach_draft\":..}]}")
+        "\"industry\":..,\"need\":..,\"fit_score\":0.0,\"contact\":..,"
+        "\"service_lines\":[..],\"outreach_draft\":..}]}")
 
 
 async def generate_leads(*, icp: str, location: str, count: int = 5, owner: str = "",
@@ -50,6 +54,19 @@ async def generate_leads(*, icp: str, location: str, count: int = 5, owner: str 
                    "need": "(enable NIM key for real extraction)", "fit_score": 0.4,
                    "outreach_draft": "Hi — noticed your work; would love to share how Sastrava can help."}]
     for item in parsed[:count]:
+        if not isinstance(item, dict):
+            continue
+        valid_service_lines = {service["id"] for service in SERVICES}
+        requested_services = item.get("service_lines", [])
+        if not isinstance(requested_services, list):
+            requested_services = []
+        service_lines = [
+            line for line in requested_services
+            if isinstance(line, str) and line in valid_service_lines
+        ][:3]
+        if not service_lines:
+            service_lines = infer_service_lines(
+                f"{item.get('need', '')} {item.get('industry', icp)}")
         l = crm.add(
             company=item.get("company", ""), name=item.get("name", ""),
             title=item.get("title", ""), location=item.get("location", location),
@@ -58,9 +75,10 @@ async def generate_leads(*, icp: str, location: str, count: int = 5, owner: str 
             contact=item.get("contact", ""), source="leadgen",
             outreach_draft=item.get("outreach_draft", ""),
             outreach_status="draft" if item.get("outreach_draft") else "none",
+            service_lines=service_lines,
             owner=owner, status="new")
         leads_out.append({"id": l.id, "company": l.label(), "location": l.location,
-                          "fit_score": l.fit_score})
+                          "fit_score": l.fit_score, "service_lines": l.service_lines})
         await bus.emit("learn", "leadgen", f"lead: {l.label()} ({l.location}) fit {l.fit_score:.2f}",
                        trace=trace)
     await bus.emit("done", "leadgen", f"{len(leads_out)} leads into CRM (outreach awaits human)",

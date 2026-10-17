@@ -138,6 +138,34 @@
       <div class="card"><h3>✷ Swarm Sessions <span class="pill">live</span></h3><div id="swarmList"></div></div>
     </div>
   </div>
+  <div class="panel" id="p-consult">
+    <h3 class="glow">SASTRAVA CONSULTING · LISTEN → SHAPE → DELIVER</h3>
+    <div class="cols">
+      <div class="card">
+        <label>Workflow</label><select id="consult_workflow">
+          <option value="intake">Client intake</option>
+          <option value="security">Authorized security scope</option>
+          <option value="learning">Learning plan</option>
+        </select>
+        <label>Service line</label><select id="consult_service"></select>
+        <label>Organization or authorized assets</label><input id="consult_org" maxlength="200"/>
+        <label>Audience (optional)</label><input id="consult_audience" maxlength="2000"/>
+        <label>Brief</label><textarea id="consult_brief" maxlength="20000"></textarea>
+        <label>Data sensitivity</label><select id="consult_sensitivity">
+          <option>internal</option><option>public</option><option>confidential</option><option>restricted</option>
+        </select>
+        <label class="row"><input id="consult_authorized" type="checkbox" style="width:auto"/>
+          I confirm authorization for the listed security-scope assets</label>
+        <button onclick="runSastravaWorkflow()">Shape a consulting response</button>
+        <div class="err" id="consult_msg"></div>
+      </div>
+      <div class="card"><h3>Human-reviewed workflow</h3>
+        <p>Responses distinguish evidence from assumptions and organize next steps into Listen,
+          Shape, and Deliver. A security scope is a planning response, not an assessment.</p>
+        <pre class="out" id="consult_out" style="display:none"></pre>
+      </div>
+    </div>
+  </div>
   <div class="panel" id="p-feed">
     <h3 class="glow">◆ DATA FEED + LIVE STREAM</h3>
     <div class="cols">
@@ -160,6 +188,7 @@
   <div class="tab active" data-tab="nexus"><span class="ic">✷</span><span class="lb">NEXUS</span></div>
   <div class="tab" data-tab="agents"><span class="ic">◈</span><span class="lb">AGENTS</span></div>
   <div class="tab" data-tab="swarms"><span class="ic">⣿</span><span class="lb">SWARMS</span></div>
+  <div class="tab" data-tab="consult"><span class="ic">◎</span><span class="lb">CONSULT</span></div>
   <div class="tab" data-tab="feed"><span class="ic">◆</span><span class="lb">FEED</span></div>
   <div class="tab" data-tab="system"><span class="ic">▤</span><span class="lb">SYSTEM</span></div>
   <div class="tab" id="tab-command" data-tab="command" style="display:none"><span class="ic">★</span><span class="lb">COMMAND</span></div>
@@ -191,6 +220,7 @@ async function boot(){
   if(ME.tier>=3)$("tab-command").style.display="flex";
   renderLegend();
   try{const am=await api("/api/agents");AGENTS=am.agents;renderAgents();}catch(e){}
+  loadSastravaCatalog();
   try{const g=await api("/api/graph");$("netPill").textContent=g.stats.nodes+" nodes";renderGraph(g);}catch(e){}
   await refresh();if(ME.tier>=3)connectWS();loadSwarms();
   setInterval(refresh,8000);setInterval(loadSwarms,4000);
@@ -227,6 +257,26 @@ const stat=(k,v)=>`<div class="stat"><span>${k}</span><span class="v">${v}</span
 function renderAgents(){$("agentGrid").innerHTML=AGENTS.map(a=>{const c=LC[a.lane]||'#8fa8cf';
   return `<div class="agent" id="ag_${a.key}" onclick="pickAgent('${a.key}')"><div class="lane" style="color:${c}">${a.lane}</div><b>${a.title.replace(' Agent','')}</b></div>`;}).join("");
   $("sw_agents").innerHTML=AGENTS.map(a=>`<label class="chk"><input type="checkbox" value="${a.key}" style="width:auto"> ${a.title.replace(' Agent','')}</label>`).join("");}
+async function loadSastravaCatalog(){try{const catalog=await api("/api/sastrava/catalog");
+  $("consult_service").innerHTML=catalog.services.map(s=>`<option value="${s.id}">${s.name}</option>`).join("");
+}catch(e){$("consult_msg").textContent=e.message;}}
+async function runSastravaWorkflow(){
+  const kind=$("consult_workflow").value, brief=$("consult_brief").value.trim();
+  if(!brief){$("consult_msg").textContent="enter a brief";return;}
+  const sensitivity=$("consult_sensitivity").value;
+  let path="/api/sastrava/intake", body={service_line:$("consult_service").value,
+    brief,organization:$("consult_org").value, audience:$("consult_audience").value,sensitivity};
+  if(kind==="security"){path="/api/sastrava/security-scope";body={brief,
+    assets:$("consult_org").value.split(",").map(s=>s.trim()).filter(Boolean),
+    authorization_confirmed:$("consult_authorized").checked,sensitivity};}
+  if(kind==="learning"){path="/api/sastrava/learning-plan";body={topic:brief,
+    audience:$("consult_audience").value||"To be clarified",duration:$("consult_org").value,sensitivity};}
+  $("consult_msg").textContent="working…";$("consult_out").style.display="none";
+  try{const result=await api(path,{method:"POST",body:JSON.stringify(body)});
+    $("consult_msg").textContent="completed · "+result.method;
+    $("consult_out").textContent=result.deliverable;$("consult_out").style.display="block";
+  }catch(e){$("consult_msg").textContent=e.message;}
+}
 function pickAgent(k){SELAGENT=AGENTS.find(a=>a.key===k);document.querySelectorAll(".agent").forEach(x=>x.classList.remove("sel"));
   $("ag_"+k).classList.add("sel");$("agentPanel").style.display="block";$("ap_title").textContent=SELAGENT.title;
   $("ap_meta").textContent=`${SELAGENT.lane} · ${SELAGENT.model_role}`;$("ap_out").style.display="none";$("ap_task").focus();}

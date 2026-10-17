@@ -103,6 +103,19 @@
       <button onclick="genLeads()" style="width:100%">◎ HUNT LEADS</button>
       <div id="lg_msg" style="font-size:12px;color:var(--dim);min-height:16px"></div>
     </div>
+    <div class="card">
+      <h3>SASTRAVA Consulting</h3>
+      <label>Service line</label><select id="sc_service"></select>
+      <label>Organization</label><input id="sc_org" maxlength="200"/>
+      <label>Client brief</label><textarea id="sc_brief" maxlength="20000"></textarea>
+      <label>Sensitivity</label><select id="sc_sensitivity">
+        <option>internal</option><option>public</option><option>confidential</option><option>restricted</option>
+      </select>
+      <div style="height:8px"></div>
+      <button onclick="runSastravaIntake()" style="width:100%">LISTEN → SHAPE → DELIVER</button>
+      <div id="sc_msg" style="font-size:12px;color:var(--dim);min-height:16px"></div>
+      <pre id="sc_out" style="display:none;white-space:pre-wrap;max-height:300px;overflow:auto"></pre>
+    </div>
     <div class="card"><h3>Agents</h3><div id="agents" class="row"></div></div>
   </div>
 
@@ -141,7 +154,7 @@ async function boot(){
   if((ME.tier||1)<3){$("login").style.display="none";$("gate").style.display="grid";return;}
   $("login").style.display="none";$("gate").style.display="none";$("wrap").style.display="grid";
   $("who").textContent=ME.role+" · TIER "+ME.tier;
-  await refresh(); await loadAgents(); await loadAudit(); connectWS();
+  await refresh(); await loadAgents(); await loadAudit(); await loadSastravaCatalog(); connectWS();
   setInterval(refresh,8000);
 }
 async function refresh(){
@@ -161,6 +174,7 @@ function renderPipe(p){
     return `<div class="stage"><h4>${s.toUpperCase()} · ${ls.length}</h4>`+
       ls.map(l=>`<div class="lead"><span class="fit">fit ${l.fit_score.toFixed(2)}</span>
         <b>${esc(l.label)}</b><br><span style="color:var(--dim)">${esc(l.location||'—')} · ${esc(l.industry||'')}</span><br>
+        <span style="color:var(--cyan)">${(l.service_lines||[]).map(esc).join(" · ")}</span><br>
         <span style="color:var(--dim)">need:</span> ${esc((l.need||'').slice(0,80))}<br>
         <span style="color:var(--amber)">outreach: ${l.outreach_status}</span>
         ${l.outreach_status==='draft'?`<button style="padding:2px 8px;margin-left:6px" onclick="approve('${l.id}')">approve outreach</button>`:''}
@@ -175,6 +189,18 @@ async function genLeads(){$("lg_msg").textContent="hunting…";try{
 }catch(e){$("lg_msg").textContent=e.message;}}
 async function loadAgents(){const {agents}=await api("/api/agents");
   $("agents").innerHTML=agents.map(a=>`<span class="badge">${a.title}</span>`).join("");}
+async function loadSastravaCatalog(){try{const c=await api("/api/sastrava/catalog");
+  $("sc_service").innerHTML=c.services.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join("");
+}catch(e){$("sc_msg").textContent=e.message;}}
+async function runSastravaIntake(){const brief=$("sc_brief").value.trim();
+  if(!brief){$("sc_msg").textContent="enter a client brief";return;}
+  $("sc_msg").textContent="working…";$("sc_out").style.display="none";
+  try{const r=await api("/api/sastrava/intake",{method:"POST",body:JSON.stringify({
+    service_line:$("sc_service").value,organization:$("sc_org").value,brief,
+    sensitivity:$("sc_sensitivity").value})});
+    $("sc_msg").textContent="completed · "+r.method;$("sc_out").textContent=r.deliverable;
+    $("sc_out").style.display="block";
+  }catch(e){$("sc_msg").textContent=e.message;}}
 async function loadAudit(){try{const {audit}=await api("/api/audit");
   $("audit").innerHTML=audit.map(a=>`<div class="aud">${new Date(a.ts*1000).toLocaleTimeString()} · ${a.actor} · <b>${a.tool}</b> → ${a.outcome}</div>`).join("")||"<div class='aud'>no activity</div>";}catch(e){}}
 async function reweave(){$("sysline").textContent="reweaving…";try{const r=await api("/api/reweave",{method:"POST"});

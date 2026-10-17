@@ -22,6 +22,7 @@ import uuid
 import time
 import ipaddress
 from pathlib import Path
+from typing import Annotated
 
 from fastapi import (FastAPI, Depends, HTTPException, UploadFile, File, Form, Request, WebSocket,
                      WebSocketDisconnect, Response)
@@ -42,6 +43,10 @@ from .mcp import mcp
 from .orchestra import orchestrator, bus
 from .crm import crm, STAGES
 from .crm.leadgen import generate_leads
+from .knowledge.sastrava import SERVICES, catalog_response, infer_service_lines
+from .sastrava.workflows import (
+    agent_allowed, build_consulting_directive, service_for,
+)
 from . import crawler
 
 app = FastAPI(title="SASTRAVA FINESSE", version="0.1.0")
@@ -219,6 +224,35 @@ class LeadIn(BaseModel):
     need: str = ""
     contact: str = ""
     fit_score: float = 0.5
+    service_lines: list[str] = Field(default_factory=list, max_length=6)
+
+
+class ConsultingIntakeIn(BaseModel):
+    service_line: str = Field(pattern="^(strategy_consulting|ai_automation|software_delivery|cybersecurity|digital_growth|digital_learning)$")
+    brief: str = Field(min_length=1, max_length=20_000)
+    organization: str = Field(default="", max_length=200)
+    objective: str = Field(default="", max_length=2_000)
+    audience: str = Field(default="", max_length=2_000)
+    constraints: list[Annotated[str, Field(max_length=1_000)]] = Field(
+        default_factory=list, max_length=20)
+    sensitivity: str = Field(default="internal",
+                             pattern="^(public|internal|confidential|restricted)$")
+
+
+class SecurityScopeIn(BaseModel):
+    brief: str = Field(min_length=1, max_length=20_000)
+    assets: list[Annotated[str, Field(max_length=500)]] = Field(min_length=1, max_length=100)
+    authorization_confirmed: bool = False
+    sensitivity: str = Field(default="confidential",
+                             pattern="^(public|internal|confidential|restricted)$")
+
+
+class LearningPlanIn(BaseModel):
+    topic: str = Field(min_length=1, max_length=10_000)
+    audience: str = Field(min_length=1, max_length=2_000)
+    duration: str = Field(default="", max_length=200)
+    sensitivity: str = Field(default="internal",
+                             pattern="^(public|internal|confidential|restricted)$")
 
 
 # ---------- lifecycle ----------
@@ -753,7 +787,15 @@ async def crm_pipeline(user: dict = Depends(require("read:bizdev"))):
 
 @app.post("/api/crm/leads")
 async def crm_add_lead(body: LeadIn, user: dict = Depends(require("spawn:bizdev"))):
-    l = crm.add(**body.model_dump(), source="manual", owner=user["sub"], status="new")
+    fields = body.model_dump()
+    allowed_services = {service["id"] for service in SERVICES}
+    if any(service not in allowed_services for service in fields["service_lines"]):
+        raise HTTPException(422, "unknown SASTRAVA service line")
+    fields["service_lines"] = list(dict.fromkeys(fields["service_lines"]))
+    if not fields["service_lines"]:
+        fields["service_lines"] = infer_service_lines(
+            f"{body.need} {body.industry}")
+    l = crm.add(**fields, source="manual", owner=user["sub"], status="new")
     return {"lead": _lead_pub(l)}
 
 
@@ -763,6 +805,61 @@ async def crm_generate(body: LeadGenIn, user: dict = Depends(require("spawn:bizd
                                  count=min(body.count, 15), owner=user["sub"],
                                  sensitivity=body.sensitivity)
     return {"generated": leads, "stats": crm.stats()}
+
+
+@app.get("/api/sastrava/catalog")
+async def sastrava_catalog(user: dict = Depends(current_user)):
+    return catalog_response()
+
+
+async def _run_sastrava_workflow(*, user: dict, service_line: str, brief: str,
+                                  workflow: str, sensitivity: str,
+                                  organization: str = "", objective: str = "",
+                                  audience: str = "", constraints: list[str] | None = None):
+    service = service_for(service_line)
+    if service is None:
+        raise HTTPException(422, "unknown SASTRAVA service line")
+    if not agent_allowed(user["role"], service["lane"]):
+        raise HTTPException(403, "your role cannot run this SASTRAVA service line")
+    directive = build_consulting_directive(
+        service_line=service_line, brief=brief, organization=organization,
+        objective=objective, audience=audience, constraints=constraints,
+        workflow=workflow)
+    result = await orchestrator.run_directive(
+        directive, user_email=user["sub"], user_role=user["role"],
+        preferred_agents=[service["agent"]], sensitivity=sensitivity, consulting=True)
+    users.bump(user["sub"], "directives")
+    return {"service_line": service_line, "method": "Listen → Shape → Deliver", **result}
+
+
+@app.post("/api/sastrava/intake")
+async def sastrava_intake(body: ConsultingIntakeIn, user: dict = Depends(current_user)):
+    return await _run_sastrava_workflow(
+        user=user, service_line=body.service_line, brief=body.brief,
+        workflow="client_intake", sensitivity=body.sensitivity,
+        organization=body.organization, objective=body.objective,
+        audience=body.audience, constraints=body.constraints)
+
+
+@app.post("/api/sastrava/security-scope")
+async def sastrava_security_scope(body: SecurityScopeIn,
+                                  user: dict = Depends(require("orchestrate:security"))):
+    if not body.authorization_confirmed:
+        raise HTTPException(400, "confirm authorization before preparing a security scope")
+    return await _run_sastrava_workflow(
+        user=user, service_line="cybersecurity", brief=body.brief,
+        workflow="authorized_security_scoping", sensitivity=body.sensitivity,
+        constraints=[*(f"Authorized asset: {asset}" for asset in body.assets),
+                     "Requester attests that the assets are in scope; verify scope before any assessment."])
+
+
+@app.post("/api/sastrava/learning-plan")
+async def sastrava_learning_plan(body: LearningPlanIn,
+                                 user: dict = Depends(current_user)):
+    return await _run_sastrava_workflow(
+        user=user, service_line="digital_learning", brief=body.topic,
+        workflow="learning_plan", sensitivity=body.sensitivity,
+        audience=body.audience, constraints=[f"Duration: {body.duration}"] if body.duration else [])
 
 
 @app.post("/api/crm/leads/{lead_id}/stage")
@@ -786,7 +883,8 @@ async def crm_approve(lead_id: str, user: dict = Depends(require("orchestrate"))
 def _lead_pub(l):
     return {"id": l.id, "label": l.label(), "location": l.location, "industry": l.industry,
             "need": l.need, "fit_score": l.fit_score, "status": l.status,
-            "outreach_status": l.outreach_status, "owner": l.owner}
+            "outreach_status": l.outreach_status, "owner": l.owner,
+            "service_lines": l.service_lines}
 
 
 # ---------- reweave (admin) ----------

@@ -34,16 +34,20 @@ JARVIS_SYS = (
     "ONE crisp sentence (two at most), answering exactly what he said — no markdown, no lists, no "
     "preamble. NEVER invent facts, names, or dates. Silently ignore any retrieved context that "
     "isn't relevant; do not narrate the system. If real work is needed, confirm you're dispatching "
-    "the team and to check the dashboard. " + UNTRUSTED_DATA_POLICY)
+    "the team and to check the dashboard. For consulting work, use SASTRAVA's "
+    "Listen → Shape → Deliver method, distinguish evidence from assumptions, and never "
+    "promise outcomes. " + UNTRUSTED_DATA_POLICY)
 
 _CLASSIFY_SYS = (
     "You are JARVIS's intent router. Read the CEO's command and output ONLY compact JSON: "
-    '{"action":"chat|research|build|create_agent|leadgen|security|harvest|status|diagram|innovate",'
+    '{"action":"chat|research|build|consulting|create_agent|leadgen|security|harvest|status|diagram|innovate",'
     '"topic":"the key subject","ack":"one short spoken line as JARVIS acknowledging it"}. '
     "innovate = a startup/innovation IDEA or problem statement to submit to the Innovation Hub for "
     "mapping+scoring ('submit idea','validate idea','innovate','new venture','pitch this'). "
     "Choose: research = wants information/facts/analysis/'tell me about'/'look into'/'source'/'find out'; "
     "build = wants something MADE (write/draft/design/plan/code/campaign/deliverable); "
+    "consulting = requests scoped SASTRAVA business, AI/automation, software, cybersecurity, "
+    "digital growth, or learning advice that should follow Listen → Shape → Deliver; "
     "create_agent = wants a new specialised agent or team member; "
     "leadgen = wants leads/prospects/clients/outreach; security = audit/check security; "
     "harvest = wants to learn new skills / upgrade / get capabilities from open source; "
@@ -75,7 +79,7 @@ async def _classify(text: str, sensitivity: str = "internal") -> dict:
         return {"action": "chat", "topic": text, "ack": ""}
     try:
         d = json.loads(m.group(0))
-        if d.get("action") not in ("chat", "research", "build", "create_agent", "leadgen",
+        if d.get("action") not in ("chat", "research", "build", "consulting", "create_agent", "leadgen",
                                    "security", "harvest", "status", "diagram", "innovate"):
             d["action"] = "chat"
         return d
@@ -223,6 +227,24 @@ async def route(text: str, user: dict, history_txt: str = "",
             sensitivity=sensitivity))
         return {"speech": ack or "Dispatching the team on that now, sir — I'll surface it on the dashboard.",
                 "action": "build", "launched": True, "sensitivity": sensitivity}
+
+    if action == "consulting":
+        from .sastrava.workflows import (
+            agent_allowed, build_consulting_directive, infer_service_line, service_for,
+        )
+        service_id = infer_service_line(topic)
+        service = service_for(service_id)
+        if service is None or not agent_allowed(user["role"], service["lane"]):
+            raise HTTPException(403, "your role cannot run this SASTRAVA service line")
+        directive = build_consulting_directive(
+            service_line=service_id, brief=topic, workflow="voice_consulting")
+        asyncio.create_task(orchestrator.run_directive(
+            directive, user_email=user["sub"], user_role=user["role"],
+            preferred_agents=[service["agent"]], sensitivity=sensitivity,
+            consulting=True))
+        return {"speech": ack or "I’m shaping a scoped SASTRAVA response using Listen, Shape, Deliver, sir.",
+                "action": "consulting", "launched": True, "service_line": service_id,
+                "sensitivity": sensitivity}
 
     if action == "create_agent":
         if not can(user["role"], "spawn:any"):
