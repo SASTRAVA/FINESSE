@@ -24,6 +24,9 @@ LANE_BIZDEV = "bizdev"
 LANE_EXEC = "exec"
 LANE_GENERAL = "general"
 LANE_SECURITY = "security"      # continuous platform security auditing
+ALL_LANES = (LANE_CODING, LANE_PROMPT, LANE_MARKETING, LANE_BIZDEV,
+             LANE_EXEC, LANE_GENERAL, LANE_SECURITY)
+SENSITIVITY_LEVELS = ("public", "internal", "confidential", "restricted")
 
 
 @dataclass
@@ -104,3 +107,24 @@ def can(role_name: str, permission: str) -> bool:
     if permission.startswith("read:") and "read:all" in r.permissions:
         return True
     return False
+
+
+def permitted_lanes(role_or_lane: str) -> tuple[str, ...]:
+    """Return the data lanes a principal may retrieve; unknown context is least-privilege."""
+    if role_or_lane in ALL_LANES:
+        lane = role_or_lane
+        executive = lane == LANE_EXEC
+    else:
+        role = role_of(role_or_lane)
+        lane = role.lane
+        executive = role.tier >= 3 or ADMIN in role.permissions
+    if executive:
+        return ALL_LANES + ("shared", "global")
+    return tuple(dict.fromkeys((lane, LANE_GENERAL, "shared", "global")))
+
+
+def max_sensitivity(role_or_lane: str) -> str:
+    if role_or_lane in ALL_LANES:
+        return "internal" if role_or_lane != LANE_EXEC else "restricted"
+    role = role_of(role_or_lane)
+    return "restricted" if role.tier >= 3 or ADMIN in role.permissions else "internal"

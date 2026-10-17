@@ -73,17 +73,18 @@ class SecurityGuardTests(unittest.TestCase):
         searched_roles = []
 
         async def fake_search(query, limit, flt=None):
-            role = flt["role"]
+            role = flt["lane"]
             searched_roles.append(role)
-            payload = {"role": role, "title": role, "text": f"context for {role}"}
+            payload = {"role": role, "lane": role, "sensitivity": "internal",
+                       "title": role, "text": f"context for {role}"}
             return [(0.9, payload)]
 
         with patch("engine.rag.retriever.store.search", new=AsyncMock(side_effect=fake_search)):
             hits = asyncio.run(retriever.retrieve("project context", role="marketing"))
 
-        self.assertEqual(searched_roles, ["marketing", "shared", "global"])
+        self.assertEqual(searched_roles, ["marketing", "general", "shared", "global"])
         self.assertEqual({hit["payload"]["role"] for hit in hits},
-                         {"marketing", "shared", "global"})
+                         {"marketing", "general", "shared", "global"})
 
     def test_upload_filename_cannot_escape_upload_directory(self):
         token = make_token("staff@example.com", "Software Engineer", 1)

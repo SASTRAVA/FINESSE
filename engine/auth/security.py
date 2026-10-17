@@ -1,6 +1,8 @@
 """JWT + password hashing. Thin wrappers so the rest of the code stays clean."""
 from __future__ import annotations
 import time
+import hashlib
+import json
 from typing import Optional
 
 import jwt
@@ -39,3 +41,27 @@ def decode_token(token: str) -> Optional[dict]:
         return jwt.decode(token, cfg.JWT_SECRET, algorithms=["HS256"])
     except Exception:  # noqa: BLE001
         return None
+
+
+def make_gatekeeper_approval(email: str, tool: str, args: dict) -> str:
+    """Mint a short-lived, action-bound approval after an authenticated human confirms."""
+    now = int(time.time())
+    payload = {
+        "sub": email, "purpose": "gatekeeper_approval", "tool": tool,
+        "args_sha256": hashlib.sha256(
+            json.dumps(args, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
+        "iat": now, "exp": now + 120,
+    }
+    return jwt.encode(payload, cfg.JWT_SECRET, algorithm="HS256")
+
+
+def verify_gatekeeper_approval(token: str, email: str, tool: str, args: dict) -> bool:
+    try:
+        payload = jwt.decode(token, cfg.JWT_SECRET, algorithms=["HS256"])
+    except Exception:  # noqa: BLE001
+        return False
+    expected = hashlib.sha256(
+        json.dumps(args, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    return (payload.get("purpose") == "gatekeeper_approval"
+            and payload.get("sub") == email and payload.get("tool") == tool
+            and payload.get("args_sha256") == expected)

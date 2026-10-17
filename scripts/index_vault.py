@@ -9,6 +9,7 @@ Run once after setup, and again whenever you add a lot of notes by hand:
 """
 from __future__ import annotations
 import asyncio
+import re
 from pathlib import Path
 
 from engine.config import cfg
@@ -18,17 +19,49 @@ from engine.rag.ingest import chunk_text
 # map top-level vault folders -> agent lanes
 _LANE = {
     "04_AI_Agents": "shared", "16_MCP": "coding", "17_RAG": "coding", "18_Vector_DB": "coding",
-    "12_Prompts": "prompt", "13_AI_Memory": "shared", "20_AI_Orchestration_Core": "shared",
-    "10_Clients": "bizdev", "03_Roles": "shared", "11_Knowledge_Base": "shared",
+    "12_Prompts": "prompt", "13_AI_Memory": "exec", "20_AI_Orchestration_Core": "exec",
+    "10_Clients": "bizdev", "03_Roles": "exec", "11_Knowledge_Base": "shared",
 }
 _SKIP = {".obsidian", ".streamlit", "_Archived_Backup", "19_Archive", "lib"}
 
 
-def _lane_for(rel: Path) -> str:
+def _frontmatter(text: str) -> dict[str, str]:
+    match = re.match(r"\A---\s*\n(.*?)\n---(?:\s|\Z)", text, re.DOTALL)
+    if not match:
+        return {}
+    return {key: value.strip().strip('"\'') for key, value in
+            re.findall(r"(?m)^(role|lane|sensitivity|injected_by):\s*(.*?)\s*$",
+                       match.group(1))}
+
+
+def _lane_for(rel: Path, metadata: dict[str, str] | None = None) -> str:
     top = rel.parts[0] if rel.parts else ""
+    if top in {"01_Executive", "02_Executive", "03_Roles", "13_AI_Memory",
+               "20_AI_Orchestration_Core"}:
+        return "exec"
+    if "_Injected" in rel.parts:
+        lane = (metadata or {}).get("lane") or (metadata or {}).get("role", "")
+        if lane in {"coding", "prompt", "marketing", "bizdev", "exec", "general", "security"}:
+            return lane
+        return "exec"
     if "marketing" in str(rel).lower() or "seo" in str(rel).lower():
         return "marketing"
-    return _LANE.get(top, "shared")
+    return _LANE.get(top, "general")
+
+
+def _sensitivity_for(lane: str, rel: Path, metadata: dict[str, str] | None = None) -> str:
+    path = str(rel).lower()
+    declared = (metadata or {}).get("sensitivity", "")
+    if lane == "exec" or any(word in path for word in (
+            "10_clients", "confidential", "restricted", "private", "finance", "hr", "legal")):
+        order = ("public", "internal", "confidential", "restricted")
+        return max(("confidential", declared if declared in order else "confidential"),
+                   key=order.index)
+    if declared in {"public", "internal", "confidential", "restricted"}:
+        return declared
+    if "_injected" in path:
+        return "confidential"
+    return "internal"
 
 
 async def main():
@@ -46,11 +79,17 @@ async def main():
         if len(text.strip()) < 40:
             continue
         rel = p.relative_to(cfg.VAULT)
-        lane = _lane_for(rel)
+        frontmatter = _frontmatter(text)
+        lane = _lane_for(rel, frontmatter)
+        private_injection = "_Injected" in rel.parts
+        sensitivity = _sensitivity_for(lane, rel, frontmatter)
+        owner = frontmatter.get("injected_by", "") if private_injection else ""
         for i, ch in enumerate(chunk_text(text)):
             batch_texts.append(ch)
-            batch_meta.append({"title": p.stem, "role": lane, "source": "vault",
-                               "path": str(rel), "chunk": i})
+            batch_meta.append({"title": p.stem, "role": lane, "lane": lane,
+                               "sensitivity": sensitivity,
+                               "source": "vault_injected" if private_injection else "vault",
+                               "owner": owner, "path": str(rel), "chunk": i})
             if len(batch_texts) >= 64:
                 await store.upsert(batch_texts, batch_meta)
                 total += len(batch_texts)

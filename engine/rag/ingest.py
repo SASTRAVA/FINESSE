@@ -106,21 +106,37 @@ async def _store_chunks(chunks: List[str], meta: dict) -> dict:
 
 
 async def ingest_text(text: str, *, title: str, role: str, injected_by: str,
-                      source: str = "prompt") -> dict:
+                      source: str = "prompt", lane: str | None = None,
+                      sensitivity: str | None = None) -> dict:
     """Ingest raw text / a pasted requirement / a prompt (human-typed)."""
+    from ..auth.rbac import SENSITIVITY_LEVELS, role_of
+    document_lane = lane or role
+    if document_lane not in ("coding", "prompt", "marketing", "bizdev", "exec",
+                             "general", "security", "shared", "global"):
+        document_lane = role_of(role).lane
+    if sensitivity is None:
+        sensitivity = ("confidential" if document_lane == "exec" or source == "vault"
+                       else "internal")
+    if sensitivity not in SENSITIVITY_LEVELS:
+        raise ValueError(f"unsupported sensitivity: {sensitivity}")
     chunks = await asyncio.to_thread(chunk_text, text)     # CPU chunking off the loop (F4)
-    meta = {"title": title, "role": role, "injected_by": injected_by,
+    meta = {"title": title, "role": document_lane, "lane": document_lane,
+            "sensitivity": sensitivity, "injected_by": injected_by,
             "source": source, "ts": time.time()}
+    if source not in {"crawl", "skill_harvest", "vault"}:
+        meta["owner"] = injected_by
     result = await _store_chunks(chunks, meta)
     await asyncio.to_thread(_mirror_to_vault, title, text, meta)   # sync file write off the loop
     return result
 
 
-async def ingest_file(path: str | Path, *, role: str, injected_by: str) -> dict:
+async def ingest_file(path: str | Path, *, role: str, injected_by: str,
+                      lane: str | None = None, sensitivity: str | None = None) -> dict:
     """Ingest an uploaded pdf/docx/text/md file."""
     p = Path(path)
     text = await asyncio.to_thread(_read_any, p)   # sync pdf/docx/xlsx parse off the loop (F4)
     return await ingest_text(text, title=p.stem, role=role,
+                             lane=lane, sensitivity=sensitivity,
                              injected_by=injected_by, source=p.suffix.lstrip(".") or "file")
 
 
@@ -134,6 +150,8 @@ def _mirror_to_vault(title: str, text: str, meta: dict) -> None:
         front = ("---\n"
                  f"title: {title}\n"
                  f"role: {meta.get('role')}\n"
+                 f"lane: {meta.get('lane', meta.get('role'))}\n"
+                 f"sensitivity: {meta.get('sensitivity', 'internal')}\n"
                  f"injected_by: {meta.get('injected_by')}\n"
                  f"source: {meta.get('source')}\n"
                  f"tags: [injected, {meta.get('role','general')}]\n"

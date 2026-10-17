@@ -21,6 +21,7 @@ import time
 import asyncio
 
 from .config import cfg
+from .prompt_guard import UNTRUSTED_DATA_POLICY
 
 _LANES = {"coding", "prompt", "marketing", "bizdev", "exec", "general"}
 
@@ -31,7 +32,8 @@ _ANALYZE_SYS = (
     "Return ONLY JSON: {\"missing_skills\":[\"short topic\",...], "
     "\"github_queries\":[\"search terms for a skills/prompts repo\",...], "
     "\"new_agent\":{\"title\":\"..\",\"lane\":\"coding|prompt|marketing|bizdev|general\","
-    "\"mandate\":\"one sentence\"}|null}. Empty arrays / null when nothing is needed.")
+    "\"mandate\":\"one sentence\"}|null}. Empty arrays / null when nothing is needed. "
+    + UNTRUSTED_DATA_POLICY)
 
 
 class Hermes:
@@ -47,7 +49,7 @@ class Hermes:
         self.log = self.log[-60:]
 
     async def observe(self, *, directive: str, deliverable: str, agents: list[str],
-                      trace: str = "") -> None:
+                      trace: str = "", sensitivity: str = "internal") -> None:
         """Called (in the background) after every directive / swarm / single-agent run."""
         if not cfg.HERMES_ENABLED:
             return
@@ -57,18 +59,19 @@ class Hermes:
                        f"overseeing interaction — {len(agents)} agent(s): {', '.join(agents) or '—'}",
                        trace=trace)
         try:
-            gaps = await self._analyze(directive, deliverable, agents)
+            gaps = await self._analyze(directive, deliverable, agents, sensitivity)
         except Exception as e:  # noqa: BLE001
             await bus.emit("error", "hermes", f"analysis failed: {e}", trace=trace)
             return
         if gaps:
             await self._evolve(gaps, trace)
 
-    async def _analyze(self, directive, deliverable, agents) -> dict | None:
+    async def _analyze(self, directive, deliverable, agents, sensitivity="internal") -> dict | None:
         from .llm import llm
         user = (f"Task: {directive}\n\nAgents used: {agents}\n\n"
                 f"Deliverable (excerpt):\n{(deliverable or '')[:1400]}\n\nReturn JSON only.")
-        raw = await llm.chat(_ANALYZE_SYS, user, role="fast", temperature=0.2, max_tokens=400)
+        raw = await llm.chat(_ANALYZE_SYS, user, role="fast", temperature=0.2, max_tokens=400,
+                             sensitivity=sensitivity)
         m = re.search(r"\{.*\}", raw, re.DOTALL)
         if not m:
             return None

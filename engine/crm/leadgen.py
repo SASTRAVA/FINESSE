@@ -23,7 +23,7 @@ _SYS = ("You are Sastrava's Lead Generation Agent. From the provided web results
 
 
 async def generate_leads(*, icp: str, location: str, count: int = 5, owner: str = "",
-                         trace: str = "") -> list[dict]:
+                         trace: str = "", sensitivity: str = "internal") -> list[dict]:
     await bus.emit("system", "leadgen", f"hunting {count} leads: '{icp}' in {location}", trace=trace)
 
     # 1. geo-scoped search (keyless web_search tool)
@@ -40,7 +40,8 @@ async def generate_leads(*, icp: str, location: str, count: int = 5, owner: str 
     user = (f"ICP: {icp}\nLocation: {location}\nCount: {count}\n\n"
             f"# Web results\n{web_txt}\n\n# Brain context\n{ctx.to_message()}\n\n"
             f"Return JSON only.")
-    raw = await llm.chat(_SYS, user, role="fast", temperature=0.3, max_tokens=1600)
+    raw = await llm.chat(_SYS, user, role="fast", temperature=0.3, max_tokens=1600,
+                         sensitivity=sensitivity)
     parsed = _parse(raw)
 
     leads_out = []

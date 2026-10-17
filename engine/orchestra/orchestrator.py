@@ -7,7 +7,7 @@ Flow for one directive:
   2. SWARM    — those agents run concurrently, each retrieving from the shared brain.
   3. SYNTH    — a Synthesizer merges everything into one human-facing deliverable.
   4. PERSIST  — the deliverable is written to the vault (Obsidian live map) and a
-                distilled pattern is folded into shared memory.
+                distilled pattern is folded into identity-scoped memory.
 
 Human-in-the-loop: the orchestrator NEVER executes external actions. It produces
 a deliverable that ends with a human-review checklist. The human decides.
@@ -22,6 +22,7 @@ import uuid
 from ..config import cfg
 from ..agents.registry import registry
 from ..auth.rbac import can, role_of
+from ..prompt_guard import UNTRUSTED_DATA_POLICY
 from .events import bus
 from .memory import shared_memory
 from .swarm import swarm
@@ -48,10 +49,12 @@ def _lanes_allowed(user_role: str) -> list[str]:
 class Orchestrator:
     async def run_directive(self, directive: str, *, user_email: str, user_role: str,
                             preferred_agents: list[str] | None = None,
-                            all_agents: bool = False) -> dict:
+                            all_agents: bool = False,
+                            sensitivity: str = "internal") -> dict:
         trace = uuid.uuid4().hex[:8]
         t0 = time.time()
-        session = sessions.start("swarm", directive, trace, requested_by=user_role)
+        session = sessions.start("swarm", directive, trace, requested_by=user_role,
+                                 owner=user_email, lane=role_of(user_role).lane)
         allowed = _lanes_allowed(user_role)
         await bus.emit("system", "orchestrator",
                        f"directive received from {user_role}", trace=trace,
@@ -67,7 +70,9 @@ class Orchestrator:
             preferred_agents = [s.key for s in candidates]
         forced = bool(preferred_agents)   # user explicitly chose -> bypass the planner cap
 
-        plan = await self._plan(directive, roster, trace, preferred_agents)
+        plan = await self._plan(directive, roster, trace, preferred_agents,
+                                user_id=user_email, user_role=user_role,
+                                sensitivity=sensitivity)
 
         # Validate the plan against the REAL roster — the planner (a small model)
         # sometimes invents keys. Keep only real ones; else fall back to a keyword
@@ -96,20 +101,27 @@ class Orchestrator:
                 continue
             agent = registry.spawn(spec.key, trace=trace)
             agents_and_tasks.append((agent, item.get("task", directive)))
-        results = await swarm.run(agents_and_tasks, trace=trace)
+        results = await swarm.run(agents_and_tasks, trace=trace, user_id=user_email,
+                                  user_role=user_role, sensitivity=sensitivity)
 
         # 3. SYNTH — skip the extra LLM call when a single agent already answered
         if len(results) == 1:
             final = results[0].output
             await bus.emit("system", "orchestrator", "single agent — synthesis skipped", trace=trace)
         else:
-            final = await self._synthesize(directive, results, trace)
+            final = await self._synthesize(directive, results, trace, user_email, user_role,
+                                           sensitivity)
 
         # 4. PERSIST — off the event loop (sync file write + Obsidian REST push, F3)
         note_path = await asyncio.to_thread(write_deliverable, directive, final, user_role,
                                             trace, [r.role for r in results])
         await shared_memory.remember(text=final[:1500], kind="deliverable", role=user_role,
-                                     actor="orchestrator", trace=trace, confidence=0.7)
+                                     actor="orchestrator", trace=trace, confidence=0.7,
+                                 user_id=user_email, lane=role_of(user_role).lane,
+                                 tainted=any(r.tainted for r in results),
+                                 sensitivity=max(
+                                     [sensitivity, *(r.sensitivity for r in results)],
+                                     key=("public", "internal", "confidential", "restricted").index))
 
         elapsed = time.time() - t0
         sessions.finish(session, agents=[r.role for r in results], elapsed=elapsed,
@@ -117,10 +129,14 @@ class Orchestrator:
         await bus.emit("done", "orchestrator", f"directive complete in {elapsed:.1f}s",
                        trace=trace, agents=len(results))
         # Hermes observes every interaction (background — never blocks the response)
-        if cfg.HERMES_ENABLED:
+        sensitivity_order = ("public", "internal", "confidential", "restricted")
+        effective_sensitivity = max(
+            [sensitivity, *(r.sensitivity for r in results)], key=sensitivity_order.index)
+        if cfg.HERMES_ENABLED and sensitivity_order.index(effective_sensitivity) <= 1:
             from ..hermes import hermes
             asyncio.create_task(hermes.observe(directive=directive, deliverable=final,
-                                               agents=[r.role for r in results], trace=trace))
+                                               agents=[r.role for r in results], trace=trace,
+                                               sensitivity=effective_sensitivity))
         return {
             "trace": trace,
             "directive": directive,
@@ -132,7 +148,8 @@ class Orchestrator:
             "elapsed": round(elapsed, 2),
         }
 
-    async def run_single_agent(self, agent_key: str, task: str, *, user_role: str) -> dict:
+    async def run_single_agent(self, agent_key: str, task: str, *, user_role: str,
+                               user_id: str = "", sensitivity: str = "internal") -> dict:
         """Drive ONE agent directly (the 'use agents one by one' path). No planner/synth."""
         trace = uuid.uuid4().hex[:8]
         t0 = time.time()
@@ -143,34 +160,39 @@ class Orchestrator:
         if spec.lane not in allowed:
             raise PermissionError(f"role '{user_role}' may not run '{agent_key}'")
         session = sessions.start("single", f"[{spec.title}] {task}", trace,
-                                 requested_by=user_role)
+                                 requested_by=user_role, owner=user_id,
+                                 lane=role_of(user_role).lane)
         agent = registry.spawn(agent_key, trace=trace)
-        result = await agent.run(task)
+        result = await agent.run(task, user_id=user_id, user_role=user_role,
+                                 sensitivity=sensitivity)
         note_path = await asyncio.to_thread(write_deliverable, f"[{spec.title}] {task}",
                                             result.output, user_role, trace, [result.role])
         elapsed = time.time() - t0
         sessions.finish(session, agents=[result.role], elapsed=elapsed, preview=result.output)
-        if cfg.HERMES_ENABLED:
+        sensitivity_order = ("public", "internal", "confidential", "restricted")
+        if cfg.HERMES_ENABLED and sensitivity_order.index(result.sensitivity) <= 1:
             from ..hermes import hermes
             asyncio.create_task(hermes.observe(directive=f"[{spec.title}] {task}",
                                                deliverable=result.output, agents=[result.role],
-                                               trace=trace))
+                                               trace=trace, sensitivity=result.sensitivity))
         return {"trace": trace, "agent": spec.key, "title": spec.title, "lane": spec.lane,
                 "output": result.output, "elapsed": round(elapsed, 2), "steps": result.steps,
                 "vault_note": note_path}
 
-    async def _plan(self, directive, roster, trace, preferred):
+    async def _plan(self, directive, roster, trace, preferred, *, user_id="", user_role="",
+                    sensitivity="internal"):
         if preferred:
             return {"agents": [{"key": k, "task": directive} for k in preferred],
                     "synthesis": "user-selected agents"}
         keys = [s["key"] for s in roster]
         planner = registry.spawn("orchestrator_planner", trace=trace)
-        prompt = (f"Directive: {directive}\n\n"
+        prompt = (f"{UNTRUSTED_DATA_POLICY}\n\nDirective: {directive}\n\n"
                   f"Choose agents ONLY from this exact key list (do NOT invent keys):\n"
                   f"{keys}\n\nAgent details: {json.dumps(roster)}\n\n"
                   f"Pick the FEWEST agents (1-3) whose lanes actually match the directive. "
                   f'Return ONLY JSON: {{"agents":[{{"key":"<one of the keys>","task":"..."}}]}}')
-        raw = await planner.run(prompt)
+        raw = await planner.run(prompt, user_id=user_id, user_role=user_role,
+                                sensitivity=sensitivity)
         return self._parse_json(raw.output) or {"agents": []}
 
     @staticmethod
@@ -201,12 +223,19 @@ class Orchestrator:
                 picked.append(core.key)
         return picked[:3]
 
-    async def _synthesize(self, directive, results, trace):
+    async def _synthesize(self, directive, results, trace, user_id="", user_role="",
+                          sensitivity="internal"):
         synth = registry.spawn("synth", trace=trace)
         joined = "\n\n".join(f"## {r.role} ({r.agent_id})\n{r.output}" for r in results)
-        prompt = (f"Original directive: {directive}\n\nAgent outputs:\n{joined}\n\n"
+        prompt = (f"{UNTRUSTED_DATA_POLICY}\n\nOriginal directive: {directive}\n\n"
+                  f"Agent outputs:\n{joined}\n\n"
                   f"Merge into one deliverable for a human.")
-        return (await synth.run(prompt)).output
+        order = ("public", "internal", "confidential", "restricted")
+        effective = max([sensitivity, *(r.sensitivity for r in results)],
+                        key=order.index)
+        return (await synth.run(prompt, user_id=user_id, user_role=user_role,
+                                sensitivity=effective,
+                                inherited_taint=any(r.tainted for r in results))).output
 
     @staticmethod
     def _parse_json(text: str):

@@ -4,6 +4,7 @@ Karpathy rule: no magic — every knob is visible here.
 """
 from __future__ import annotations
 import os
+import logging
 from pathlib import Path
 from functools import lru_cache
 from dotenv import load_dotenv
@@ -23,11 +24,29 @@ def _i(name: str, default: int) -> int:
         return default
 
 
+def _csv(name: str, default: str) -> tuple[str, ...]:
+    values = tuple(value.strip() for value in _b(name, default).split(",") if value.strip())
+    if "*" in values:
+        raise ValueError(f"{name} must not contain a wildcard origin")
+    return values
+
+
+_DEV_ORIGINS = "http://localhost:8000,http://127.0.0.1:8000"
+
+
 class Config:
     # --- paths ---
     ROOT = ROOT
-    APP_HOST = _b("APP_HOST", "127.0.0.1")
-    APP_PORT = _i("APP_PORT", 8600)
+    ENV = _b("FINESSE_ENV", _b("ENV", "development")).lower()
+    HOST = _b("HOST", _b("APP_HOST", "127.0.0.1"))
+    PORT = _i("PORT", _i("APP_PORT", 8600))
+    APP_HOST = HOST
+    APP_PORT = PORT
+    CORS_ORIGINS = _csv("CORS_ORIGINS", _DEV_ORIGINS)
+    REDACT_PII_ON_EXTERNAL_LLM = _b("REDACT_PII_ON_EXTERNAL_LLM", "true").lower() in (
+        "1", "true", "yes")
+    ALLOW_CONFIDENTIAL_EXTERNAL_EGRESS = _b(
+        "ALLOW_CONFIDENTIAL_EXTERNAL_EGRESS", "false").lower() in ("1", "true", "yes")
     VAULT = (ROOT / _b("VAULT_PATH", "./vault")).resolve()
     DATA = (ROOT / "data").resolve()
     UPLOADS = DATA / "uploads"
@@ -153,6 +172,34 @@ class Config:
     @property
     def has_local_llm(self) -> bool:
         return bool(self.LOCAL_LLM_BASE_URL)
+
+
+def validate_startup_config(config=None) -> None:
+    """Fail closed in production; warn loudly in development when auth secrets are unsafe."""
+    config = config or cfg
+    environment = getattr(config, "ENV", "development")
+    if environment not in {"development", "production"}:
+        raise RuntimeError("FINESSE_ENV must be 'development' or 'production'")
+    placeholders = {"dev-insecure-change-me", "changeme", "0000", "finesse-ceo-2026"}
+    def is_placeholder(value: str) -> bool:
+        lowered = value.lower()
+        return (lowered in placeholders or
+                (lowered.startswith("<") and lowered.endswith(">")) or
+                any(marker in lowered for marker in ("paste_", "generate_", "set_a_strong_")))
+
+    problems = []
+    jwt_secret = str(getattr(config, "JWT_SECRET", "") or "").strip()
+    password = str(getattr(config, "CEO_PASSWORD", "") or "").strip()
+    if len(jwt_secret) < 32 or is_placeholder(jwt_secret):
+        problems.append("JWT_SECRET must be a non-placeholder secret of at least 32 characters")
+    if len(password) < 12 or is_placeholder(password):
+        problems.append("CEO_PASSWORD must be a non-placeholder password of at least 12 characters")
+    if not problems:
+        return
+    message = "Unsafe FINESSE authentication configuration: " + "; ".join(problems)
+    if environment == "production":
+        raise RuntimeError(message)
+    logging.getLogger("finesse.security").critical("%s — development mode is unsafe", message)
 
 
 @lru_cache

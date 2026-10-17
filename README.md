@@ -68,8 +68,27 @@ Edit `.env` locally:
 3. Set `CEO_EMAIL` to the account you will use.
 4. Optionally set `NVIDIA_API_KEY` for hosted NIM inference. Without it, the
    application runs in offline stub mode.
-5. Keep `APP_HOST=127.0.0.1` unless you have deliberately configured a secure
-   reverse proxy and firewall.
+5. Keep `HOST=127.0.0.1` unless you have deliberately configured a secure
+   reverse proxy and firewall. The default `CORS_ORIGINS` allowlist is limited
+   to local development origins.
+6. Leave `ALLOW_CONFIDENTIAL_EXTERNAL_EGRESS=false`. Confidential or restricted
+   prompts require `LOCAL_LLM_BASE_URL`; FINESSE blocks the request before any
+   hosted LLM call if a local endpoint is unavailable.
+7. Keep `REDACT_PII_ON_EXTERNAL_LLM=true` to mask emails and phone numbers in
+   provider-bound messages. Recognized API keys and bearer tokens are always
+   redacted before completion-provider requests.
+
+Requests and ingestion endpoints that accept data can include a `sensitivity`
+value (`public`, `internal`, `confidential`, or `restricted`); omitted values
+default to `internal`. Treat this label as a security boundary and classify
+uploaded material conservatively.
+
+For production, set `FINESSE_ENV=production` and provide a non-placeholder
+`JWT_SECRET` (at least 32 characters) and `CEO_PASSWORD` (at least 12
+characters). Startup fails if either value is missing, too short, or matches a
+known placeholder. Set `HOST`, `PORT`, and `CORS_ORIGINS` explicitly for the
+deployment; do not bind publicly without TLS, a trusted reverse proxy, and
+firewall controls.
 
 Generate a JWT secret:
 
@@ -119,6 +138,7 @@ local testing, not production accounts.
 | `engine/rag/` | Embeddings, vector storage, retrieval, ingestion |
 | `engine/llm/` | Hosted/local model routing, retries, cache and concurrency bounds |
 | `engine/mcp/` | Lane-aware tools and approval gate for write tools |
+| `engine/prompt_guard.py` | Untrusted-content wrapping and injection-pattern detection |
 | `engine/web/` | Browser dashboard pages and bundled Hub UI |
 | `scripts/` | Vault indexing and local demo-user utilities |
 | `training/` | Optional dataset export and QLoRA workflows |
@@ -132,13 +152,30 @@ local testing, not production accounts.
 - The server defaults to loopback binding. Do not expose it directly to the
   internet.
 - Uploaded files are limited to 10 MiB and stored under random temporary names.
-- Cross-lane retrieval is limited to the caller's lane plus explicitly shared
-  material.
+- RAG chunks are indexed with `lane` and `sensitivity` metadata. Retrieval
+  applies the authenticated role's lane/clearance, defaults to least privilege
+  when context is missing, and rejects legacy chunks lacking required metadata.
+  Re-index existing vault data with `python run.py --index` after upgrading.
+- Conversation memory and swarm sessions are scoped to the authenticated
+  identity and role/lane. Executive-only memory remains inaccessible to
+  non-executives; private memory is not written into the shared vault note.
+- Retrieved material is delimited as `<untrusted_content>` data. Prompt
+  override/fake-tool patterns are flagged, external tool results taint the
+  execution context, and tainted MCP writes require a short-lived,
+  action-bound signed Gatekeeper approval.
+- Hosted LLM egress redacts recognized credentials, optionally masks email and
+  phone PII, and blocks confidential/restricted prompts unless a local model is
+  configured or confidential cloud egress is explicitly enabled.
+- Login endpoints are rate-limited in memory to 10 attempts per source IP per
+  minute. Responses include `nosniff`, `DENY` frame, and no-referrer headers.
+  The limiter is process-local; use a shared gateway limiter for multi-worker
+  or distributed deployments.
 - Executive-only endpoints and the global event stream require executive
   authorization.
-- Before production, address the open HIGH/MEDIUM findings in
-  [PROJECT_REPORT.md](PROJECT_REPORT.md), including rate limiting, durable
-  multi-user storage, prompt-injection controls, and provider data governance.
+- Review the remaining open deployment, retention, TLS, multi-worker, and
+  evaluation concerns in [PROJECT_REPORT.md](PROJECT_REPORT.md) before
+  production use. Configure sensitivity correctly when ingesting content; do
+  not downgrade confidential data to make hosted inference available.
 
 ## License
 

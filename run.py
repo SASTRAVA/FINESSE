@@ -44,7 +44,8 @@ def _manifest():
 def _serve():
     import os
     import uvicorn
-    from engine.config import cfg
+    from engine.config import cfg, validate_startup_config
+    validate_startup_config()
     os.chdir(cfg.ROOT)   # ensure relative paths resolve to the FINESSE project root
     print("=" * 56)
     print("  SASTRAVA · FINESSE")
@@ -55,7 +56,7 @@ def _serve():
     print(f"  Local GPU : {'set' if cfg.has_local_llm else 'not attached'}")
     print("  Tip: run  python run.py --index  once to load the brain.")
     print("=" * 56)
-    uvicorn.run("engine.main:app", host=cfg.APP_HOST, port=cfg.APP_PORT, workers=1)
+    uvicorn.run("engine.main:app", host=cfg.HOST, port=cfg.PORT, workers=1)
 
 
 if __name__ == "__main__":

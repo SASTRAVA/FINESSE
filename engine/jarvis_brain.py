@@ -25,6 +25,8 @@ import time
 from fastapi import HTTPException
 
 from .auth.rbac import can, role_of
+from .prompt_guard import UNTRUSTED_DATA_POLICY, wrap_untrusted_content
+from .llm.provider import DataEgressBlocked
 
 JARVIS_SYS = (
     "You are JARVIS, the SASTRAVA CEO's personal AI (Iron Man style) — composed, dry-witted, "
@@ -32,7 +34,7 @@ JARVIS_SYS = (
     "ONE crisp sentence (two at most), answering exactly what he said — no markdown, no lists, no "
     "preamble. NEVER invent facts, names, or dates. Silently ignore any retrieved context that "
     "isn't relevant; do not narrate the system. If real work is needed, confirm you're dispatching "
-    "the team and to check the dashboard.")
+    "the team and to check the dashboard. " + UNTRUSTED_DATA_POLICY)
 
 _CLASSIFY_SYS = (
     "You are JARVIS's intent router. Read the CEO's command and output ONLY compact JSON: "
@@ -63,10 +65,11 @@ def _guess_lane(topic: str) -> str:
     return "general"
 
 
-async def _classify(text: str) -> dict:
+async def _classify(text: str, sensitivity: str = "internal") -> dict:
     from .llm import llm
     raw = await llm.jarvis_say(_CLASSIFY_SYS, f"Command: \"{text}\"\nReturn JSON only.",
-                               temperature=0.0, max_tokens=120)
+                               temperature=0.0, max_tokens=120,
+                               sensitivity=sensitivity)
     m = re.search(r"\{.*\}", raw, re.DOTALL)
     if not m:
         return {"action": "chat", "topic": text, "ack": ""}
@@ -80,30 +83,41 @@ async def _classify(text: str) -> dict:
         return {"action": "chat", "topic": text, "ack": ""}
 
 
-async def _chat(text: str, history_txt: str, lane: str) -> str:
+async def _chat(text: str, history_txt: str, role: str, user_id: str,
+                sensitivity: str = "internal") -> str:
     from .llm import llm
     from .rag import retriever
-    ctx = await retriever.context(text, role=lane, limit=4)
+    details = await retriever.context_details(text, role=role, user_id=user_id, limit=4)
+    order = ("public", "internal", "confidential", "restricted")
+    egress_sensitivity = max((sensitivity, details["sensitivity"]), key=order.index)
     return await llm.jarvis_say(
         JARVIS_SYS,
-        f"Conversation so far:\n{history_txt}\n\nSir just said: \"{text}\"\n\n"
-        f"Brain context:\n{ctx}\n\nReply as JARVIS.", temperature=0.5, max_tokens=160)
+        f"Conversation so far:\n{wrap_untrusted_content(history_txt, 'conversation_history')}\n\n"
+        f"Sir just said: \"{text}\"\n\n"
+        f"Brain context:\n{details['text']}\n\nReply as JARVIS.",
+        temperature=0.5, max_tokens=160, sensitivity=egress_sensitivity)
 
 
-async def _research(topic: str, user: dict) -> str:
+async def _research(topic: str, user: dict, sensitivity: str = "internal") -> str:
     from .llm import llm
     from .mcp import mcp
     from .rag import retriever
     web = await mcp.dispatch("web_search", {"query": topic, "max_results": 6},
                              lane="exec", actor=user["sub"])
-    web_txt = ("\n".join(f"- {r.get('title')} ({r.get('url')})" for r in (web.data or []))
-               if web.ok and web.data else "(no fresh web results)")
-    brain = await retriever.context(topic, role=role_of(user["role"]).lane, limit=4)
+    web_txt = (wrap_untrusted_content(
+        "\n".join(f"- {r.get('title')} ({r.get('url')})" for r in (web.data or [])),
+        "web_search") if web.ok and web.data else "(no fresh web results)")
+    details = await retriever.context_details(
+        topic, role=user["role"], user_id=user["sub"], limit=4)
+    brain = details["text"]
+    order = ("public", "internal", "confidential", "restricted")
+    egress_sensitivity = max((sensitivity, details["sensitivity"]), key=order.index)
     briefing = await llm.jarvis_say(
         JARVIS_SYS,
         f"Research topic: {topic}\n\nWeb sources:\n{web_txt}\n\nBrain:\n{brain}\n\n"
         f"Brief the CEO in 2-3 spoken sentences, grounded ONLY in these sources; note a full "
-        f"brief is saved to the vault.", temperature=0.4, max_tokens=240)
+        f"brief is saved to the vault.", temperature=0.4, max_tokens=240,
+        sensitivity=egress_sensitivity)
     await asyncio.to_thread(_save_research, topic, web_txt, brain, briefing)
     return briefing
 
@@ -143,11 +157,12 @@ _MERMAID_SYS = (
     "commentary. Keep node labels short and quote labels containing spaces.")
 
 
-async def make_diagram(topic: str) -> str:
+async def make_diagram(topic: str, sensitivity: str = "internal") -> str:
     """Generate a Mermaid diagram-as-code for any topic (used by voice + the Innovation Hub)."""
     from .llm import llm
     code = await llm.jarvis_say(_MERMAID_SYS, f"Topic: {topic}\nMermaid code only.",
-                                temperature=0.2, max_tokens=520)
+                                temperature=0.2, max_tokens=520,
+                                sensitivity=sensitivity)
     code = re.sub(r"```(?:mermaid)?", "", code).strip().strip("`").strip()
     await asyncio.to_thread(_save_diagram, topic, code)
     return code
@@ -181,23 +196,26 @@ async def _status() -> str:
             f"online, {n} knowledge vectors in the brain, security watch {sec}.")
 
 
-async def route(text: str, user: dict, history_txt: str = "") -> dict:
+async def route(text: str, user: dict, history_txt: str = "",
+                sensitivity: str = "internal") -> dict:
     """Auto-detect intent and act within the caller's role. Returns {speech, action, launched}."""
     from .orchestra.orchestrator import orchestrator
     text = (text or "").strip()
-    intent = await _classify(text)
+    intent = await _classify(text, sensitivity=sensitivity)
     action, topic, ack = intent.get("action", "chat"), intent.get("topic") or text, intent.get("ack", "")
 
     if action == "chat":
-        return {"speech": await _chat(text, history_txt, role_of(user["role"]).lane),
+        return {"speech": await _chat(text, history_txt, user["role"], user["sub"], sensitivity),
                 "action": "chat", "launched": False}
 
     if action == "research":
-        return {"speech": await _research(topic, user), "action": "research", "launched": False}
+        return {"speech": await _research(topic, user, sensitivity),
+                "action": "research", "launched": False}
 
     if action == "build":
         asyncio.create_task(orchestrator.run_directive(
-            text, user_email=user["sub"], user_role=user["role"]))
+            text, user_email=user["sub"], user_role=user["role"],
+            sensitivity=sensitivity))
         return {"speech": ack or "Dispatching the team on that now, sir — I'll surface it on the dashboard.",
                 "action": "build", "launched": True}
 
@@ -215,7 +233,8 @@ async def route(text: str, user: dict, history_txt: str = "") -> dict:
         if not can(user["role"], "spawn:bizdev"):
             raise HTTPException(403, "lead generation is restricted to the business-development lane")
         from .crm.leadgen import generate_leads
-        asyncio.create_task(generate_leads(icp=topic, location="", count=5, owner=user["sub"]))
+        asyncio.create_task(generate_leads(icp=topic, location="", count=5, owner=user["sub"],
+                                           sensitivity=sensitivity))
         return {"speech": f"Sourcing prospects around {topic} now, sir — they'll land in the CRM.",
                 "action": "leadgen", "launched": True}
 
@@ -240,7 +259,9 @@ async def route(text: str, user: dict, history_txt: str = "") -> dict:
     if action == "innovate":
         from .hub_api import map_idea
         try:
-            d = await map_idea(text, user)   # full statement, not just the topic
+            d = await map_idea(text, user, sensitivity=sensitivity)
+        except DataEgressBlocked:
+            raise
         except Exception as e:  # noqa: BLE001
             return {"speech": f"I couldn't map that idea, sir — {type(e).__name__}.",
                     "action": "innovate", "launched": False}
@@ -251,9 +272,9 @@ async def route(text: str, user: dict, history_txt: str = "") -> dict:
                 f"team is on it.", "action": "innovate", "launched": True, "data": d}
 
     if action == "diagram":
-        code = await make_diagram(topic)
+        code = await make_diagram(topic, sensitivity=sensitivity)
         return {"speech": f"I've drafted a diagram of {topic}, sir — it's live in the Innovation Hub.",
                 "action": "diagram", "launched": False, "data": {"mermaid": code}}
 
-    return {"speech": await _chat(text, history_txt, role_of(user["role"]).lane),
+    return {"speech": await _chat(text, history_txt, user["role"], user["sub"], sensitivity),
             "action": "chat", "launched": False}

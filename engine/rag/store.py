@@ -2,8 +2,9 @@
 Vector store — Qdrant (embedded now, server later), with a pure-python fallback
 so the engine boots even before qdrant-client is installed.
 
-Shared collection = the whole brain. Every agent in every swarm retrieves from
-the same store, which is how "shared, continuously evolving memory" stays coherent.
+The vector collection is shared infrastructure, but each point carries explicit
+lane and sensitivity metadata. The retriever enforces authorization before any
+stored text is returned to a caller.
 """
 from __future__ import annotations
 import asyncio
@@ -71,6 +72,18 @@ class VectorStore:
         self._ready = True
 
     async def upsert(self, texts: List[str], payloads: List[dict], ids: Optional[List[str]] = None):
+        if len(texts) != len(payloads):
+            raise ValueError("every vector text must have exactly one payload")
+        if ids is not None and len(ids) != len(texts):
+            raise ValueError("vector ids must match the number of texts")
+        allowed_lanes = {"coding", "prompt", "marketing", "bizdev", "exec",
+                         "general", "security", "shared", "global"}
+        allowed_sensitivity = {"public", "internal", "confidential", "restricted"}
+        for payload in payloads:
+            if payload.get("lane") not in allowed_lanes:
+                raise ValueError("vector payload requires a recognized lane")
+            if payload.get("sensitivity") not in allowed_sensitivity:
+                raise ValueError("vector payload requires a recognized sensitivity")
         await self.init()
         vecs = await embedder.embed(texts)
         ids = ids or [str(uuid.uuid4()) for _ in texts]

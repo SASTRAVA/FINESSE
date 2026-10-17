@@ -10,6 +10,7 @@ from __future__ import annotations
 import time
 import uuid
 from dataclasses import dataclass, field, asdict
+from ..auth.rbac import role_of
 
 
 @dataclass
@@ -19,6 +20,8 @@ class Session:
     prompt: str
     trace: str
     requested_by: str = ""
+    owner: str = ""
+    lane: str = "general"
     status: str = "running"         # running | done | error
     agents: list[str] = field(default_factory=list)
     elapsed: float = 0.0
@@ -36,9 +39,10 @@ class SessionRegistry:
         self._ring = ring
         self._list: list[Session] = []
 
-    def start(self, kind: str, prompt: str, trace: str, requested_by: str = "") -> Session:
+    def start(self, kind: str, prompt: str, trace: str, requested_by: str = "",
+              owner: str = "", lane: str = "general") -> Session:
         s = Session(id=uuid.uuid4().hex[:8], kind=kind, prompt=prompt, trace=trace,
-                    requested_by=requested_by)
+                    requested_by=requested_by, owner=owner, lane=lane)
         self._list.append(s)
         if len(self._list) > self._ring:
             self._list = self._list[-self._ring:]
@@ -51,11 +55,17 @@ class SessionRegistry:
         s.preview = preview[:240]
         s.status = status
 
-    def list(self, limit: int = 40) -> list[dict]:
-        return [s.json() for s in reversed(self._list[-limit:])]
+    def list(self, limit: int = 40, *, user_id: str = "", user_role: str = "") -> list[dict]:
+        visible = self._visible(user_id, user_role)
+        return [s.json() for s in reversed(visible[-limit:])]
 
-    def active(self) -> int:
-        return sum(1 for s in self._list if s.status == "running")
+    def active(self, *, user_id: str = "", user_role: str = "") -> int:
+        return sum(1 for s in self._visible(user_id, user_role) if s.status == "running")
+
+    def _visible(self, user_id: str, user_role: str) -> list[Session]:
+        if role_of(user_role).tier >= 3:
+            return self._list
+        return [session for session in self._list if session.owner == user_id]
 
 
 sessions = SessionRegistry()

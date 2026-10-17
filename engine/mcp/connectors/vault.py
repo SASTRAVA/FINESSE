@@ -20,11 +20,16 @@ class VaultSearch(Tool):
         "required": ["query"],
     }
 
-    async def run(self, query: str, limit: int = 5, lane: str = "general") -> ToolResult:
-        hits = await retriever.retrieve(query, role=lane, limit=min(int(limit or 5), 10))
+    async def run(self, query: str, limit: int = 5, lane: str = "general",
+                  user_id: str = "", user_role: str = "") -> ToolResult:
+        hits = await retriever.retrieve(query, role=user_role or lane, lane=lane,
+                                        user_id=user_id, limit=min(int(limit or 5), 10))
         data = [{"title": h["payload"].get("title"), "score": round(h["score"], 3),
                  "text": h["payload"].get("text", "")[:600]} for h in hits]
-        return ToolResult(True, data=data)
+        order = ("public", "internal", "confidential", "restricted")
+        sensitivity = max((h["payload"]["sensitivity"] for h in hits),
+                          key=order.index, default="public")
+        return ToolResult(True, data=data, sensitivity=sensitivity)
 
 
 mcp.register(VaultSearch())
