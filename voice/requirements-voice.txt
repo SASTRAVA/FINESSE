@@ -1,0 +1,19 @@
+# FRIDAY desktop voice client deps (install INTO the FINESSE 3.12 venv).
+#   .\.venv\Scripts\Activate.ps1
+#   pip install -r voice/requirements-voice.txt
+#
+# numpy + requests already ship in the FINESSE venv; pinned-loose here so a
+# fresh machine also works.
+
+sounddevice>=0.4.6        # mic capture (PortAudio) — claps + utterances
+numpy>=1.26               # (already in venv) energy/peak math
+faster-whisper>=1.0.0     # STT: base.en, CPU int8
+edge-tts>=6.1.9           # FRIDAY neural female voice (online)
+playsound==1.2.2          # play edge-tts mp3 on Windows (MCI); 1.2.2 is the stable one
+pyttsx3>=2.90             # offline SAPI fallback voice (Microsoft Zira)
+requests>=2.31            # (already in venv) backend calls
+
+# build only:
+pyinstaller>=6.3          # --onefile --noconsole exe
+# optional playback fallback if playsound misbehaves on your box:
+# miniaudio>=1.59

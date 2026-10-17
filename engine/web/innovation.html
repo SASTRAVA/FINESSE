@@ -1,0 +1,82 @@
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Innovation Hub · SASTRAVA</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Fira+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{--bg:#01030a;--ink:#e2f1ff;--dim:#6d86ac;--line:rgba(63,150,230,.18);--cyan:#3fdcff;
+    --green:#4be39a;--gold:#ffcf6a;--violet:#b98cff;--glass:rgba(9,18,34,.6);
+    --sans:'Fira Sans',ui-sans-serif,system-ui,Segoe UI,Roboto;--code:'Fira Code',ui-monospace,Consolas,monospace;}
+  *{box-sizing:border-box}
+  h1,.card h3,button,.feed-item .k,pre{font-family:var(--code)}
+  button{cursor:pointer;transition:.18s}button:hover{filter:brightness(1.12);box-shadow:0 0 18px rgba(75,227,154,.35)}
+  :focus-visible{outline:2px solid var(--cyan);outline-offset:2px}
+  @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+  html,body{margin:0;min-height:100%;background:
+    radial-gradient(900px 600px at 80% -5%,rgba(75,227,154,.10),transparent 60%),
+    radial-gradient(900px 700px at 10% 100%,rgba(255,207,106,.08),transparent 60%),var(--bg);
+    color:var(--ink);font:14px/1.55 var(--sans)}
+  .wrap{max-width:1180px;margin:0 auto;padding:22px}
+  h1{font-weight:800;letter-spacing:2px;margin:2px 0 2px;font-size:26px}
+  h1 b{color:var(--gold)}.sub{color:var(--dim);margin-bottom:18px}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  .card{background:var(--glass);border:1px solid var(--line);border-radius:16px;padding:16px;backdrop-filter:blur(10px)}
+  .card h3{margin:0 0 10px;font-size:11px;letter-spacing:2px;color:var(--cyan);text-transform:uppercase}
+  textarea,input{width:100%;font:inherit;color:var(--ink);background:rgba(6,14,26,.8);border:1px solid var(--line);border-radius:10px;padding:11px 13px}
+  textarea{min-height:70px;resize:vertical}
+  button{font:inherit;cursor:pointer;color:#03110c;background:linear-gradient(135deg,var(--green),var(--gold));border:0;border-radius:10px;padding:10px 16px;font-weight:700;margin-top:9px}
+  button.ghost{color:var(--cyan);background:rgba(20,52,96,.5);border:1px solid var(--line)}
+  #diagram{background:#050a14;border:1px solid var(--line);border-radius:12px;padding:14px;margin-top:12px;min-height:180px;overflow:auto;text-align:center}
+  pre{white-space:pre-wrap;font-family:ui-monospace,Consolas,monospace;font-size:11.5px;color:var(--dim);
+    background:rgba(6,14,26,.7);border:1px solid var(--line);border-radius:10px;padding:10px;margin-top:10px;max-height:150px;overflow:auto}
+  .feed-item{border-left:2px solid var(--line);padding:6px 0 6px 11px;margin-bottom:8px}
+  .feed-item .t{color:var(--gold);font-weight:700;font-size:12.5px}
+  .feed-item .k{font-size:9.5px;letter-spacing:1.5px;color:var(--dim);text-transform:uppercase}
+  .feed-item p{margin:4px 0 0;color:#b9cbe4;font-size:12.5px;max-height:64px;overflow:hidden}
+  .chips{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+  .chips span{font-size:11.5px;color:var(--cyan);border:1px solid var(--line);border-radius:14px;padding:4px 11px;cursor:pointer;background:rgba(20,52,96,.4)}
+  .err{color:#ff6b6b;font-size:12px;min-height:16px}
+  @media(max-width:840px){.grid{grid-template-columns:1fr}}
+</style>
+
+<div class="wrap">
+  <h1>◈ INNOVATION <b>HUB</b></h1>
+  <div class="sub">Where JARVIS turns your ideas into research, plans, and live analytical diagrams.</div>
+
+  <div class="grid">
+    <div class="card">
+      <h3>📊 Diagram Studio · analytical diagrams for anything</h3>
+      <textarea id="topic" placeholder="Describe anything: 'the FINESSE agent architecture', 'a go-to-market flow for our AI course', 'the RAG pipeline'…"></textarea>
+      <div class="chips" id="chips"></div>
+      <button onclick="gen()">⚡ Generate diagram</button>
+      <button class="ghost" onclick="loadFeed()">↻ Refresh hub</button>
+      <div class="err" id="err"></div>
+      <div id="diagram">Your diagram will render here.</div>
+      <pre id="code" style="display:none"></pre>
+    </div>
+
+    <div class="card">
+      <h3>💡 Idea &amp; research stream</h3>
+      <div class="sub" style="margin:0 0 8px">Sourced by JARVIS (voice: "research…" / "draw a diagram of…").</div>
+      <div id="feed">Loading…</div>
+    </div>
+  </div>
+</div>
+
+<script>
+const $=id=>document.getElementById(id);
+const TOKEN=localStorage.getItem('finesse_token')||'';
+mermaid.initialize({startOnLoad:false,theme:'dark',securityLevel:'loose',
+  themeVariables:{primaryColor:'#0e2038',primaryTextColor:'#e2f1ff',lineColor:'#3fdcff',fontFamily:'ui-sans-serif'}});
+async function api(p,o={}){o.headers=Object.assign({'Content-Type':'application/json'},o.headers||{});if(TOKEN)o.headers.Authorization='Bearer '+TOKEN;
+  const r=await fetch(p,o);if(!r.ok)throw new Error((await r.json().catch(()=>({detail:r.statusText}))).detail);return r.json();}
+const ideas=['the FINESSE multi-agent architecture','our AI-course go-to-market funnel','the RAG knowledge pipeline','JARVIS command-routing flow'];
+$('chips').innerHTML=ideas.map(i=>`<span onclick="$('topic').value='${i}';gen()">${i}</span>`).join('');
+async function render(code){try{$('code').style.display='block';$('code').textContent=code;
+  const{svg}=await mermaid.render('m'+Date.now(),code);$('diagram').innerHTML=svg;}catch(e){$('diagram').innerHTML='<span style="color:#ff6b6b">Diagram parse issue — try rephrasing.</span>';}}
+async function gen(){const topic=$('topic').value.trim();if(!topic)return;$('err').textContent='';$('diagram').textContent='Drafting…';
+  try{const r=await api('/api/diagram',{method:'POST',body:JSON.stringify({topic})});await render(r.mermaid);loadFeed();}
+  catch(e){$('err').textContent=e.message;$('diagram').textContent='';}}
+async function loadFeed(){try{const r=await api('/api/innovation');$('feed').innerHTML=(r.items||[]).map(it=>
+  `<div class="feed-item"><span class="k">${it.kind}</span><div class="t">${it.name.replace(/^\d+[-_]/,'')}</div><p>${(it.content||'').replace(/[#>*`]/g,'').slice(0,180)}…</p></div>`).join('')||'<span style="color:var(--dim)">Nothing yet — ask JARVIS to research or diagram something.</span>';}catch(e){$('feed').textContent=e.message;}}
+loadFeed();
+</script>

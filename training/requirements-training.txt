@@ -1,0 +1,21 @@
+# QLoRA fine-tuning deps. Install into a SEPARATE GPU env (not the runtime venv),
+# ideally on the machine/Colab that has the CUDA GPU.
+#
+#   python -m venv .venv-train && .\.venv-train\Scripts\Activate.ps1
+#   # 1) install the CUDA build of torch that matches your GPU (see pytorch.org):
+#   pip install torch --index-url https://download.pytorch.org/whl/cu121
+#   # 2) then the rest:
+#   pip install -r training/requirements-training.txt
+#
+# These versions are pinned to match train_qlora.py's TRL API (SFTConfig +
+# processing_class). If you bump TRL, adjust the trainer call accordingly.
+
+transformers>=4.45,<4.48
+trl>=0.12,<0.14
+peft>=0.13
+bitsandbytes>=0.43        # 4-bit QLoRA (CUDA only)
+accelerate>=0.34
+datasets>=2.20
+sentencepiece>=0.2
+# serving the merged model at an OpenAI-compatible endpoint:
+vllm>=0.6                 # or use llama.cpp / text-generation-inference instead

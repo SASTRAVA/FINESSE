@@ -1,0 +1,31 @@
+# secrets
+.env
+.env.*
+!.env.example
+# runtime data
+data/
+vault/
+FINESSE VAULT/
+training/data/
+training/adapters/
+training/merged/
+*.sqlite
+*.sqlite3
+*.db
+# local developer configuration
+.mcp.json
+.vscode/
+.claude/
+HANDOFF.md
+ARCHITECTURE.md
+voice/friday.json
+voice/FRIDAY.exe
+*.log
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+# os
+.DS_Store
+Thumbs.db

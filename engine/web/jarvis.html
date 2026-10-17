@@ -1,0 +1,261 @@
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JARVIS · SASTRAVA FINESSE</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Fira+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{--bg:#01030a;--ink:#e2f1ff;--dim:#6d86ac;--line:rgba(63,150,230,.18);--cyan:#3fdcff;
+    --blue:#2b8bff;--gold:#ffcf6a;--green:#4be39a;--violet:#b98cff;--red:#ff6b6b;
+    --glass:rgba(9,18,34,.55);--glow:rgba(63,220,255,.5);
+    --sans:'Fira Sans',ui-sans-serif,system-ui,Segoe UI,Roboto;--code:'Fira Code',ui-monospace,Consolas,monospace;}
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--ink);
+    font:14px/1.5 var(--sans);-webkit-font-smoothing:antialiased}
+  .brand,.chip .v,.chip .k,#state,#m_lat{font-family:var(--code)}
+  button,.btn,.mic{cursor:pointer}
+  :focus-visible{outline:2px solid var(--cyan);outline-offset:2px}
+  @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+  #stars{position:fixed;inset:0;z-index:0}
+  #scan{position:fixed;inset:0;z-index:1;pointer-events:none;opacity:.5;
+    background:repeating-linear-gradient(0deg,transparent 0 2px,rgba(0,20,40,.25) 3px 4px);mix-blend-mode:overlay}
+  #vignette{position:fixed;inset:0;z-index:1;pointer-events:none;
+    background:radial-gradient(120% 90% at 50% 40%,transparent 55%,rgba(0,2,8,.85))}
+  #hud{position:fixed;inset:0;z-index:2;display:grid;grid-template-rows:auto 1fr auto;padding:16px 20px;gap:14px}
+  .cnr{position:fixed;width:26px;height:26px;border:2px solid var(--cyan);opacity:.5;z-index:3;pointer-events:none}
+  .cnr.tl{top:10px;left:10px;border-right:0;border-bottom:0}.cnr.tr{top:10px;right:10px;border-left:0;border-bottom:0}
+  .cnr.bl{bottom:10px;left:10px;border-right:0;border-top:0}.cnr.br{bottom:10px;right:10px;border-left:0;border-top:0}
+  .top{display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+  .brand{font-weight:800;letter-spacing:3px;font-size:21px;text-shadow:0 0 20px var(--glow)}.brand b{color:var(--gold)}
+  .metrics{display:flex;gap:10px;flex-wrap:wrap;margin-left:auto}
+  .chip{min-width:76px;background:var(--glass);border:1px solid var(--line);border-radius:12px;padding:6px 12px;backdrop-filter:blur(8px)}
+  .chip .k{font-size:9.5px;letter-spacing:1.5px;color:var(--dim);text-transform:uppercase}
+  .chip .v{font-size:16px;font-weight:700;color:var(--cyan);text-shadow:0 0 12px var(--glow)}
+  .chip .v.g{color:var(--green)}.chip .v.gold{color:var(--gold)}
+  .btn{font:inherit;cursor:pointer;color:var(--cyan);background:rgba(20,52,96,.45);border:1px solid var(--line);
+    border-radius:12px;padding:9px 15px;transition:.16s;backdrop-filter:blur(8px);white-space:nowrap}
+  .btn:hover{border-color:var(--cyan);box-shadow:0 0 18px var(--glow);transform:translateY(-1px)}
+  .btn.univ{color:#fff;background:linear-gradient(135deg,rgba(43,139,255,.85),rgba(185,140,255,.7));border-color:transparent;font-weight:700;letter-spacing:.5px}
+  .btn.hub{color:#fff;background:linear-gradient(135deg,rgba(75,227,154,.8),rgba(255,207,106,.7));border-color:transparent;font-weight:700;letter-spacing:.5px}
+  .main{display:grid;grid-template-columns:1fr 340px;gap:16px;min-height:0}
+  .stage{display:flex;flex-direction:column;align-items:center;min-height:0;position:relative}
+  .badge{height:22px;font-size:11px;letter-spacing:2px;color:var(--gold);text-transform:uppercase;opacity:0;transition:.3s}
+  .badge.show{opacity:1}
+  #reactorCanvas{width:250px;height:250px}
+  #state{letter-spacing:4px;font-size:12px;color:var(--dim);margin-top:2px;text-transform:uppercase}
+  #status{color:var(--cyan);font-size:13.5px;min-height:20px;text-align:center;max-width:600px;text-shadow:0 0 10px rgba(63,220,255,.3)}
+  .convo{flex:1;width:100%;max-width:780px;overflow:auto;display:flex;flex-direction:column;gap:9px;padding:8px 4px;
+    -webkit-mask-image:linear-gradient(180deg,transparent,#000 5%)}
+  .msg{max-width:82%;padding:10px 14px;border-radius:15px;white-space:pre-wrap;backdrop-filter:blur(6px);animation:rise .25s ease}
+  @keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1}}
+  .you{align-self:flex-end;background:rgba(30,80,140,.45);border:1px solid var(--line);border-bottom-right-radius:5px}
+  .jar{align-self:flex-start;background:var(--glass);border:1px solid var(--line);border-bottom-left-radius:5px}
+  .jar .who{color:var(--gold);font-size:10px;font-weight:800;letter-spacing:1.5px}
+  .tag{font-size:10px;color:var(--green);margin-left:6px}
+  .feed{background:var(--glass);border:1px solid var(--line);border-radius:16px;padding:14px;display:flex;flex-direction:column;min-height:0;backdrop-filter:blur(10px)}
+  .feed h3{margin:0 0 10px;font-size:10.5px;letter-spacing:2.5px;color:var(--dim);display:flex;gap:7px;align-items:center}
+  .feed h3 .dot{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green);animation:blink 1.6s infinite}
+  @keyframes blink{50%{opacity:.35}}
+  #events{flex:1;overflow:auto;display:flex;flex-direction:column;gap:7px;font-size:12px}
+  .ev{border-left:2px solid var(--line);padding:2px 0 2px 9px;animation:rise .2s ease}.ev .a{color:var(--dim);font-size:10px}
+  .bar{display:flex;gap:10px;align-items:center}
+  input#txt{flex:1;font:inherit;color:var(--ink);background:rgba(6,14,26,.7);border:1px solid var(--line);border-radius:24px;padding:12px 18px;backdrop-filter:blur(8px)}
+  input#txt:focus{outline:none;border-color:var(--cyan);box-shadow:0 0 16px var(--glow)}
+  .mic{width:46px;height:46px;border-radius:50%;display:grid;place-items:center;font-size:19px;border:1px solid var(--line);background:rgba(20,52,96,.5);cursor:pointer;transition:.16s}
+  .mic.on{border-color:var(--green);box-shadow:0 0 18px rgba(75,227,154,.45)}.mic.off{border-color:rgba(255,107,107,.4)}
+  .ov{position:fixed;inset:0;z-index:40;display:none;background:#01030a}.ov iframe{width:100%;height:100%;border:0}
+  .ovclose{position:fixed;top:18px;right:20px;z-index:41}
+  #login{position:fixed;inset:0;display:none;place-items:center;background:rgba(1,3,10,.9);z-index:50}
+  #login .card{background:var(--glass);border:1px solid var(--line);border-radius:18px;padding:26px;width:340px;backdrop-filter:blur(14px);box-shadow:0 0 60px rgba(43,139,255,.2)}
+  #login input{width:100%;font:inherit;color:var(--ink);background:rgba(6,14,26,.9);border:1px solid var(--line);border-radius:11px;padding:12px 14px;margin-top:9px}
+  .err{color:var(--red);font-size:12px;min-height:16px}
+  @media(max-width:760px){.main{grid-template-columns:1fr}.feed{display:none}}
+</style>
+
+<canvas id="stars"></canvas><div id="scan"></div><div id="vignette"></div>
+<div class="cnr tl"></div><div class="cnr tr"></div><div class="cnr bl"></div><div class="cnr br"></div>
+
+<div id="hud">
+  <div class="top">
+    <div class="brand">SASTRAVA<span style="color:var(--gold)">·</span><b>JARVIS</b></div>
+    <div class="metrics" id="metrics">
+      <div class="chip"><div class="k">Backend</div><div class="v" id="m_backend">—</div></div>
+      <div class="chip"><div class="k">Brain</div><div class="v g" id="m_brain">0</div></div>
+      <div class="chip"><div class="k">Agents</div><div class="v" id="m_agents">0</div></div>
+      <div class="chip"><div class="k">Tools</div><div class="v" id="m_tools">0</div></div>
+      <div class="chip"><div class="k">Latency</div><div class="v gold" id="m_lat">—</div></div>
+    </div>
+    <button class="btn univ" onclick="openOv('/universe')">◎ ENTER THE UNIVERSE</button>
+    <button class="btn hub" onclick="openOv('/hub')">◈ INNOVATION HUB</button>
+    <button class="btn" onclick="openOv('/innovation')" title="diagram studio">◱ DIAGRAMS</button>
+  </div>
+
+  <div class="main">
+    <div class="stage">
+      <div class="badge" id="badge"></div>
+      <canvas id="reactorCanvas" width="500" height="500"></canvas>
+      <div id="state">standby</div>
+      <div id="status">initialising…</div>
+      <div class="convo" id="convo"></div>
+    </div>
+    <div class="feed">
+      <h3><span class="dot"></span>LIVE ORCHESTRA FEED</h3>
+      <div id="events"></div>
+    </div>
+  </div>
+
+  <div class="bar">
+    <div class="mic off" id="micBtn" title="toggle listening" onclick="toggleMic()">🎤</div>
+    <input id="txt" placeholder="Speak, or type a command for JARVIS…" onkeydown="if(event.key==='Enter')sendText()">
+    <button class="btn" onclick="sendText()">Send</button>
+  </div>
+</div>
+
+<button class="btn ovclose" id="ovclose" style="display:none" onclick="closeOv()">✕ close</button>
+<div id="ov" class="ov"></div>
+
+<div id="login"><div class="card">
+  <div class="brand" style="font-size:19px">Sign in to <b>JARVIS</b></div>
+  <input id="li_email" placeholder="email" value="">
+  <input id="li_pw" type="password" placeholder="password" onkeydown="if(event.key==='Enter')doLogin()">
+  <div style="height:12px"></div>
+  <button class="btn univ" style="width:100%" onclick="doLogin()">Enter</button>
+  <div class="err" id="li_err"></div>
+</div></div>
+
+<script>
+const $=id=>document.getElementById(id);
+let TOKEN=localStorage.getItem('finesse_token')||'';
+let listening=false,speaking=false,busy=false,muted=false,voice=null,ws=null,currentAudio=null,lastAnnounce=0;
+// paced listening: buffer words, wait for full silence, then a pause, THEN reply
+let pendingText='',silenceTimer=null;
+const END_SILENCE_MS=3000;   // wait this long after your last words before acting (read)
+const PRE_REPLY_MS=2000;     // extra pause before JARVIS replies (don't rush)
+const KC={spawn:'#b98cff',think:'#3fdcff',tool:'#ffcf6a',done:'#4be39a',memory:'#ffcf6a',learn:'#ffcf6a',error:'#ff6b6b',system:'#7fe6ff'};
+const ACT={research:'🔎 sourcing intelligence',build:'⚙ dispatching the swarm',create_agent:'✚ growing a new agent',
+  leadgen:'🎯 sourcing leads',security:'🛡 auditing security',harvest:'⬇ self-upgrading skills',status:'📊 system report',diagram:'📊 drafting a diagram'};
+
+async function api(p,o={}){o.headers=Object.assign({'Content-Type':'application/json'},o.headers||{});
+  if(TOKEN)o.headers.Authorization='Bearer '+TOKEN;const r=await fetch(p,o);
+  if(r.status===401){TOKEN='';localStorage.removeItem('finesse_token');$('login').style.display='grid';throw new Error('sign in');}
+  if(!r.ok)throw new Error((await r.json().catch(()=>({detail:r.statusText}))).detail);return r.json();}
+async function doLogin(){$('li_err').textContent='';try{const r=await api('/api/login',{method:'POST',body:JSON.stringify({email:$('li_email').value.trim(),password:$('li_pw').value})});
+  TOKEN=r.token;localStorage.setItem('finesse_token',TOKEN);$('login').style.display='none';ensureAudio();boot();}catch(e){$('li_err').textContent=e.message;}}
+
+/* ---------- starfield ---------- */
+(function(){const c=$('stars'),x=c.getContext('2d');let w,h,st=[];
+  function rz(){w=c.width=innerWidth;h=c.height=innerHeight;st=[...Array(160)].map(()=>({x:Math.random()*w,y:Math.random()*h,z:Math.random()*.8+.2,s:Math.random()*1.4+.3}));}
+  addEventListener('resize',rz);rz();(function loop(){x.clearRect(0,0,w,h);for(const p of st){p.y+=p.z*.22;if(p.y>h)p.y=0;
+    x.globalAlpha=p.z;x.fillStyle=p.z>.75?'#7fe6ff':'#356';x.beginPath();x.arc(p.x,p.y,p.s,0,7);x.fill();}requestAnimationFrame(loop);})();})();
+
+/* ---------- Web Audio: arc reactor reacts to JARVIS's voice AND yours ---------- */
+let audioCtx=null,micAnalyser=null,ttsAnalyser=null,flash=0;
+const freq=new Uint8Array(64);
+const SC={idle:[63,220,255],listen:[75,227,154],think:[255,207,106],speak:[185,140,255]};
+let rState='idle';
+async function ensureAudio(){if(audioCtx){if(audioCtx.state==='suspended')audioCtx.resume();return;}
+  try{audioCtx=new(window.AudioContext||window.webkitAudioContext)();}catch(e){return;}
+  try{const stream=await navigator.mediaDevices.getUserMedia({audio:true});
+    const src=audioCtx.createMediaStreamSource(stream);micAnalyser=audioCtx.createAnalyser();
+    micAnalyser.fftSize=128;micAnalyser.smoothingTimeConstant=.72;src.connect(micAnalyser);}catch(e){}}
+function connectTTS(el){try{if(!audioCtx)audioCtx=new(window.AudioContext||window.webkitAudioContext)();
+  const src=audioCtx.createMediaElementSource(el);ttsAnalyser=audioCtx.createAnalyser();
+  ttsAnalyser.fftSize=128;ttsAnalyser.smoothingTimeConstant=.6;src.connect(ttsAnalyser);ttsAnalyser.connect(audioCtx.destination);}catch(e){}}
+const RC=$('reactorCanvas'),RX=RC.getContext('2d');
+(function drawReactor(){requestAnimationFrame(drawReactor);
+  const W=RC.width,H=RC.height,cx=W/2,cy=H/2,base=W/2;RX.clearRect(0,0,W,H);
+  const[r,g,b]=SC[rState]||SC.idle,col=a=>`rgba(${r},${g},${b},${a})`,t=Date.now()/1000;
+  const an=rState==='speak'?(ttsAnalyser||micAnalyser):(micAnalyser||ttsAnalyser);
+  let level=0;if(an){an.getByteFrequencyData(freq);let s=0;for(let i=0;i<freq.length;i++)s+=freq[i];level=s/freq.length/255;}
+  const amp=an?Math.min(1,level*1.6):(0.12+0.12*Math.sin(t*2));
+  if(rState==='listen'&&level>0.32)flash=1;flash*=0.9;
+  /* circular frequency spectrum — radiates to the active voice */
+  const seg=56;for(let i=0;i<seg;i++){const a0=(i/seg)*6.283+t*0.25;
+    const fv=an?freq[Math.floor(i/seg*freq.length)]/255:(0.15+0.15*Math.sin(i*0.7+t*3));
+    const r1=base*0.70,r2=r1+base*0.20*(0.25+fv);RX.strokeStyle=col(0.18+fv*0.82);RX.lineWidth=3.4;
+    RX.beginPath();RX.moveTo(cx+Math.cos(a0)*r1,cy+Math.sin(a0)*r1);RX.lineTo(cx+Math.cos(a0)*r2,cy+Math.sin(a0)*r2);RX.stroke();}
+  /* rings */
+  RX.strokeStyle=col(0.30);RX.lineWidth=2;RX.beginPath();RX.arc(cx,cy,base*0.66,0,7);RX.stroke();
+  RX.strokeStyle=col(0.12+flash*0.5);RX.lineWidth=10;RX.beginPath();RX.arc(cx,cy,base*0.53,0,7);RX.stroke();
+  RX.strokeStyle=col(0.22);RX.setLineDash([4,10]);RX.lineWidth=1.5;RX.beginPath();RX.arc(cx,cy,base*0.44,0,7);RX.stroke();RX.setLineDash([]);
+  /* rotating arc-reactor triangles */
+  RX.save();RX.translate(cx,cy);RX.rotate(t*0.5);for(let i=0;i<6;i++){RX.rotate(1.0472);
+    RX.fillStyle=col(0.22+amp*0.55);RX.beginPath();RX.moveTo(0,-base*0.50);RX.lineTo(base*0.085,-base*0.35);RX.lineTo(-base*0.085,-base*0.35);RX.closePath();RX.fill();}RX.restore();
+  /* pulsing core */
+  const cr=base*0.26*(1+amp*0.65)+flash*base*0.08,gr=RX.createRadialGradient(cx,cy,0,cx,cy,cr*1.7);
+  gr.addColorStop(0,'rgba(255,255,255,0.95)');gr.addColorStop(0.4,col(0.9));gr.addColorStop(1,col(0));
+  RX.fillStyle=gr;RX.beginPath();RX.arc(cx,cy,cr*1.7,0,7);RX.fill();
+  RX.fillStyle='rgba(255,255,255,0.9)';RX.beginPath();RX.arc(cx,cy,cr*0.42,0,7);RX.fill();
+})();
+
+/* ---------- metrics ---------- */
+function animNum(el,to){const from=parseInt((el.textContent||'0').replace(/\D/g,''))||0;if(from===to){el.textContent=to.toLocaleString();return;}
+  const step=(to-from)/16;let cur=from,i=0;const t=setInterval(()=>{cur+=step;if(++i>=16){cur=to;clearInterval(t);}el.textContent=Math.round(cur).toLocaleString();},22);}
+async function refresh(){try{const s=await api('/api/status');$('m_backend').textContent=s.backend;
+  animNum($('m_brain'),s.brain_vectors);animNum($('m_agents'),s.agent_types);animNum($('m_tools'),s.tools.length);}catch(e){}}
+
+/* ---------- visuals ---------- */
+function setState(s,label){rState=s;$('state').textContent=label||({idle:'standby',listen:'listening',think:'thinking',speak:'speaking'}[s]||s);}
+function setStatus(t){$('status').textContent=t;}
+function showBadge(a){const b=$('badge');if(!ACT[a]){b.classList.remove('show');return;}b.textContent=ACT[a];b.classList.add('show');setTimeout(()=>b.classList.remove('show'),4000);}
+function addMsg(who,text,tag){const d=document.createElement('div');d.className='msg '+(who==='you'?'you':'jar');
+  d.innerHTML=(who==='you'?'':'<div class="who">JARVIS</div>')+esc(text)+(tag?`<span class="tag">${tag}</span>`:'');$('convo').appendChild(d);$('convo').scrollTop=$('convo').scrollHeight;}
+function esc(s){return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+
+/* ---------- voice out ---------- */
+function pickVoice(){const vs=speechSynthesis.getVoices();voice=vs.find(v=>/daniel|google uk english male|microsoft (george|ryan)|arthur|male/i.test(v.name))||vs.find(v=>/en-GB/i.test(v.lang))||vs.find(v=>/^en/i.test(v.lang))||vs[0]||null;}
+if('speechSynthesis' in window){speechSynthesis.onvoiceschanged=pickVoice;pickVoice();}
+function endSpeak(cb){speaking=false;currentAudio=null;setState('idle');if(!muted)safeStart();cb&&cb();}
+function browserSpeak(text,cb){if(!('speechSynthesis' in window)){endSpeak(cb);return;}const u=new SpeechSynthesisUtterance(text);if(voice)u.voice=voice;u.rate=1.0;u.pitch=.9;u.onend=()=>endSpeak(cb);speechSynthesis.cancel();speechSynthesis.speak(u);}
+async function speak(text,cb){if(!text){cb&&cb();return;}speaking=true;pendingText='';clearTimeout(silenceTimer);try{rec&&rec.stop();}catch(e){}setState('speak');
+  try{const r=await fetch('/api/tts',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+TOKEN},body:JSON.stringify({text})});
+    if(r.status===200){const url=URL.createObjectURL(await r.blob());const a=new Audio(url);a.crossOrigin='anonymous';currentAudio=a;
+      connectTTS(a);a.onended=()=>{URL.revokeObjectURL(url);endSpeak(cb);};a.onerror=()=>{URL.revokeObjectURL(url);browserSpeak(text,cb);};
+      a.play().catch(()=>browserSpeak(text,cb));return;}}catch(e){}
+  browserSpeak(text,cb);}
+
+/* ---------- voice in ---------- */
+const SR=window.SpeechRecognition||window.webkitSpeechRecognition;let rec=null;
+function initRec(){if(!SR){setStatus('This browser lacks speech recognition — use Chrome/Edge, or type below.');return;}
+  rec=new SR();rec.lang='en-US';rec.continuous=true;rec.interimResults=true;
+  rec.onstart=()=>{listening=true;$('micBtn').className='mic on';if(!speaking)setState('listen');};
+  rec.onresult=e=>{if(speaking||busy)return;   // never take input while JARVIS talks
+    let interim='',final='';for(let i=e.resultIndex;i<e.results.length;i++){const t=e.results[i][0].transcript;if(e.results[i].isFinal)final+=t;else interim+=t;}
+    if(interim)setStatus('“'+(pendingText+' '+interim).trim()+'”');
+    if(final.trim()){pendingText=(pendingText+' '+final).trim();setStatus('“'+pendingText+'” …');}
+    resetSilence();};
+  rec.onerror=e=>{listening=false;if(e.error==='not-allowed'||e.error==='service-not-allowed')setStatus('🎤 microphone blocked — click the 🔒 icon in the address bar and Allow it.');else if(e.error!=='no-speech')setStatus('mic: '+e.error);};
+  rec.onend=()=>{listening=false;$('micBtn').className='mic off';if(!muted&&!speaking)safeStart();};}
+function safeStart(){if(!rec||listening||speaking||muted)return;try{rec.start();}catch(e){}}
+function resetSilence(){if(!pendingText)return;clearTimeout(silenceTimer);
+  silenceTimer=setTimeout(()=>{                    // you went quiet -> read window done
+    const t=pendingText.trim();pendingText='';if(!t||speaking||busy)return;
+    setStatus('one moment, sir…');
+    setTimeout(()=>{if(!speaking&&!busy)handle(t);},PRE_REPLY_MS);  // extra pause before reply
+  },END_SILENCE_MS);}
+function toggleMic(){ensureAudio();muted=!muted;if(muted){try{rec&&rec.stop();}catch(e){}setState('idle','muted');setStatus('microphone muted — tap 🎤 to resume');}else{setStatus('listening…');safeStart();}}
+const SLEEP=/\b(stand down|go to sleep|that'?s all|mute yourself)\b/i;
+async function handle(text){text=(text||'').trim();if(!text||busy)return;
+  if(SLEEP.test(text)){muted=true;try{rec&&rec.stop();}catch(e){}addMsg('you',text);speak('Standing by, sir. Tap the microphone when you need me.');return;}
+  busy=true;addMsg('you',text);setState('think');setStatus('processing…');const t0=performance.now();
+  try{const r=await api('/api/voice',{method:'POST',body:JSON.stringify({text})});$('m_lat').textContent=Math.round(performance.now()-t0)+'ms';
+    if(r.action&&r.action!=='chat')showBadge(r.action);addMsg('jarvis',r.speech,r.launched?'▶ executing':'');speak(r.speech);
+  }catch(e){addMsg('jarvis','('+e.message+')');setState('idle');if(!muted)safeStart();}busy=false;}
+async function sendText(){const t=$('txt').value.trim();if(!t)return;$('txt').value='';ensureAudio();if(!TOKEN){$('login').style.display='grid';return;}handle(t);}
+
+/* ---------- feed ---------- */
+function connectWS(){try{ws=new WebSocket((location.protocol==='https:'?'wss':'ws')+'://'+location.host+'/ws?token='+encodeURIComponent(TOKEN));
+  ws.onmessage=m=>{const e=JSON.parse(m.data),c=KC[e.type]||'#7fe6ff';const d=document.createElement('div');d.className='ev';d.style.borderLeftColor=c;
+    d.innerHTML=`<span class="a">${new Date(e.ts*1000).toLocaleTimeString()} · ${esc(e.actor||'')}</span><br>${esc(e.message||'')}`;
+    $('events').appendChild(d);while($('events').children.length>60)$('events').removeChild($('events').firstChild);$('events').scrollTop=$('events').scrollHeight;
+    if(e.type==='done'&&/directive complete/i.test(e.message||'')&&!speaking&&!busy&&Date.now()-lastAnnounce>15000){lastAnnounce=Date.now();speak('Sir, one of your directives just completed — the deliverable is ready in the vault.');}};
+  ws.onclose=()=>setTimeout(connectWS,3000);}catch(e){}}
+
+/* ---------- overlays (Universe + Innovation Hub) ---------- */
+function openOv(src){const o=$('ov');o.innerHTML='<iframe src="'+src+'" title="ov"></iframe>';o.style.display='block';$('ovclose').style.display='block';}
+function closeOv(){$('ov').style.display='none';$('ov').innerHTML='';$('ovclose').style.display='none';}
+
+/* ---------- boot ---------- */
+async function boot(){initRec();refresh();setInterval(refresh,8000);try{const me=await api('/api/me');if(me.tier>=3)connectWS();}catch(e){}
+  try{const r=await api('/api/voice',{method:'POST',body:JSON.stringify({wake:true,text:''})});addMsg('jarvis',r.speech);speak(r.speech);}catch(e){}
+  setStatus('Say something, sir — or type below. (allow the mic if prompted)');if(!muted)safeStart();}
+if(TOKEN){ensureAudio();boot();}else $('login').style.display='grid';
+</script>

@@ -1,0 +1,153 @@
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FRIDAY · SASTRAVA</title>
+<style>
+  :root{--bg:#03060c;--ink:#dbeeff;--dim:#7a93b8;--line:#18263f;--cyan:#33e6ff;--violet:#b98cff;
+    --green:#4be39a;--gold:#ffcc55;--red:#ff6b6b;--glass:rgba(9,16,29,.7);}
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:radial-gradient(1200px 800px at 50% -10%,#0a1830,#03060c);
+    color:var(--ink);font:15px/1.5 ui-sans-serif,system-ui,Segoe UI,Roboto}
+  #wrap{max-width:720px;margin:0 auto;min-height:100%;display:flex;flex-direction:column;padding:20px}
+  h1{font-weight:800;letter-spacing:.5px;margin:6px 0 2px;font-size:26px}
+  h1 b{color:var(--gold)} .sub{color:var(--dim);font-size:12.5px;margin-bottom:14px}
+  button{font:inherit;cursor:pointer;color:var(--cyan);background:rgba(18,48,90,.5);
+    border:1px solid var(--line);border-radius:12px;padding:10px 16px;transition:.15s}
+  button:hover{border-color:var(--cyan);box-shadow:0 0 14px rgba(51,230,255,.3)}
+  button.primary{background:linear-gradient(180deg,rgba(30,70,120,.8),rgba(12,30,54,.8));color:#eaf6ff}
+  button.stop{color:var(--red);border-color:rgba(255,107,107,.4)}
+  input{font:inherit;color:var(--ink);background:rgba(6,12,22,.85);border:1px solid var(--line);
+    border-radius:10px;padding:10px 12px;width:100%}
+  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .orb{width:120px;height:120px;border-radius:50%;margin:10px auto;position:relative;
+    background:radial-gradient(circle at 50% 40%,#7fe6ff,#2b7fd0 60%,#0a2a4a);
+    box-shadow:0 0 40px rgba(51,230,255,.35);transition:.3s}
+  .orb.idle{filter:saturate(.5) brightness(.7);box-shadow:0 0 20px rgba(51,230,255,.15)}
+  .orb.listen{animation:pulse 1.1s infinite;box-shadow:0 0 60px rgba(75,227,154,.55);
+    background:radial-gradient(circle at 50% 40%,#a8ffd5,#2fd08a 60%,#0a4a2a)}
+  .orb.speak{animation:pulse .5s infinite;box-shadow:0 0 60px rgba(185,140,255,.55);
+    background:radial-gradient(circle at 50% 40%,#e0c8ff,#9b6aff 60%,#3a1a6a)}
+  @keyframes pulse{0%,100%{transform:scale(1)}50%{transform:scale(1.07)}}
+  #status{text-align:center;color:var(--dim);font-size:12.5px;min-height:18px;margin:4px 0 12px}
+  #log{flex:1;overflow:auto;display:flex;flex-direction:column;gap:8px;padding:6px 2px 12px}
+  .msg{max-width:82%;padding:9px 13px;border-radius:14px;font-size:14px;white-space:pre-wrap}
+  .you{align-self:flex-end;background:rgba(30,70,120,.5);border:1px solid var(--line);border-bottom-right-radius:4px}
+  .fri{align-self:flex-start;background:var(--glass);border:1px solid var(--line);border-bottom-left-radius:4px}
+  .fri .who{color:var(--gold);font-size:11px;font-weight:700;letter-spacing:.5px}
+  .tag{font-size:10px;color:var(--green);margin-left:6px}
+  .bar{position:sticky;bottom:0;background:linear-gradient(180deg,transparent,#03060c 30%);padding-top:10px}
+  .err{color:var(--red);font-size:12px;min-height:16px}
+  .hint{color:var(--dim);font-size:11.5px;text-align:center;margin-top:6px}
+  #login{position:fixed;inset:0;display:none;place-items:center;background:rgba(3,6,12,.85);z-index:9}
+  #login .card{background:var(--glass);border:1px solid var(--line);border-radius:16px;padding:22px;width:320px}
+</style>
+
+<div id="wrap">
+  <h1>SASTRAVA<span style="color:var(--gold)">·</span><b>FRIDAY</b></h1>
+  <div class="sub">Browser voice — talk to your AI, it dispatches the team. No install.</div>
+
+  <div id="orb" class="orb idle"></div>
+  <div id="status">tap <b>Wake FRIDAY</b> and allow the mic</div>
+
+  <div id="log"></div>
+
+  <div class="bar">
+    <div class="row" style="margin-bottom:8px">
+      <button id="wakeBtn" class="primary" onclick="wake()">🎙️ Wake FRIDAY</button>
+      <button id="talkBtn" onclick="pushToTalk()">Push to talk</button>
+      <button class="stop" onclick="standDown()">Stand down</button>
+      <span id="handsWrap" class="hint" style="margin-left:auto">hands-free: <b id="handsState">off</b></span>
+    </div>
+    <div class="row">
+      <input id="txt" placeholder="…or type a command (works even without a mic)"
+             onkeydown="if(event.key==='Enter')sendText()">
+      <button onclick="sendText()">Send</button>
+    </div>
+    <div class="hint" id="hint">Best in Chrome or Edge. Say “stand down” to stop.</div>
+  </div>
+</div>
+
+<div id="login"><div class="card">
+  <h1 style="font-size:20px">Sign in</h1>
+  <div class="sub">FRIDAY needs your FINESSE login.</div>
+  <input id="li_email" placeholder="email" value="">
+  <div style="height:8px"></div>
+  <input id="li_pw" type="password" placeholder="password" onkeydown="if(event.key==='Enter')doLogin()">
+  <div style="height:10px"></div>
+  <button class="primary" style="width:100%" onclick="doLogin()">Enter</button>
+  <div class="err" id="li_err"></div>
+</div></div>
+
+<script>
+const $=id=>document.getElementById(id);
+let TOKEN=localStorage.getItem('finesse_token')||'';
+let hands=false, speaking=false, listening=false, voice=null;
+
+async function api(p,o={}){o.headers=Object.assign({'Content-Type':'application/json'},o.headers||{});
+  if(TOKEN)o.headers.Authorization='Bearer '+TOKEN;
+  const r=await fetch(p,o);
+  if(r.status===401){TOKEN='';localStorage.removeItem('finesse_token');showLogin();throw new Error('please sign in');}
+  if(!r.ok)throw new Error((await r.json().catch(()=>({detail:r.statusText}))).detail);
+  return r.json();}
+
+function showLogin(){$('login').style.display='grid';}
+async function doLogin(){$('li_err').textContent='';try{
+  const r=await api('/api/login',{method:'POST',body:JSON.stringify(
+    {email:$('li_email').value.trim(),password:$('li_pw').value})});
+  TOKEN=r.token;localStorage.setItem('finesse_token',TOKEN);$('login').style.display='none';
+}catch(e){$('li_err').textContent=e.message;}}
+
+// ---------- text-to-speech (FRIDAY = female voice) ----------
+function pickVoice(){const vs=speechSynthesis.getVoices();
+  voice = vs.find(v=>/aria|jenny|zira|samantha|joanna|female/i.test(v.name))
+       || vs.find(v=>/en-US/i.test(v.lang)) || vs.find(v=>/^en/i.test(v.lang)) || vs[0] || null;}
+if('speechSynthesis' in window){speechSynthesis.onvoiceschanged=pickVoice;pickVoice();}
+function speak(text,cb){ if(!('speechSynthesis' in window)){cb&&cb();return;}
+  const u=new SpeechSynthesisUtterance(text); if(voice)u.voice=voice; u.rate=1.03; u.pitch=1.06;
+  speaking=true; setOrb('speak');
+  u.onend=()=>{speaking=false; setOrb(hands?'listen':'idle'); cb&&cb();};
+  speechSynthesis.cancel(); speechSynthesis.speak(u);}
+
+// ---------- speech-to-text ----------
+const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+let rec=null;
+if(SR){ rec=new SR(); rec.lang='en-US'; rec.interimResults=false; rec.maxAlternatives=1;
+  rec.onresult=e=>{listening=false; onHeard(e.results[0][0].transcript);};
+  rec.onerror=e=>{listening=false; setStatus('mic: '+e.error); if(e.error==='not-allowed')setStatus('mic blocked — allow it or type below');};
+  rec.onend=()=>{listening=false; if(hands && !speaking) startListen();};
+} else { setStatus('this browser has no speech recognition — use the text box'); }
+
+function startListen(){ if(!rec||listening||speaking)return;
+  try{rec.start(); listening=true; setOrb('listen'); setStatus('listening…');}catch(e){} }
+function stopListen(){ try{rec&&rec.stop();}catch(e){} listening=false; }
+
+function setOrb(s){$('orb').className='orb '+s;}
+function setStatus(t){$('status').innerHTML=t;}
+function addMsg(who,text,tag){const d=document.createElement('div');
+  d.className='msg '+(who==='you'?'you':'fri');
+  d.innerHTML=(who==='you'?'':'<div class="who">FRIDAY</div>')+esc(text)+(tag?`<span class="tag">${tag}</span>`:'');
+  $('log').appendChild(d); $('log').scrollTop=$('log').scrollHeight;}
+function esc(s){return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+
+const SLEEP=/\b(stand down|go to sleep|that'?s all|goodbye friday)\b/i;
+
+async function onHeard(text){ text=(text||'').trim(); if(!text)return;
+  addMsg('you',text);
+  if(SLEEP.test(text)){hands=false;setHands();speak('Standing down, boss. Tap wake when you need me.');return;}
+  setStatus('thinking…');
+  try{ const r=await api('/api/voice',{method:'POST',body:JSON.stringify({text})});
+    addMsg('friday',r.speech, r.launched?'▶ dispatched the team':'');
+    speak(r.speech, ()=>{ if(hands) startListen(); });
+  }catch(e){ addMsg('friday','('+e.message+')'); setOrb(hands?'listen':'idle'); }}
+
+async function wake(){ if(!TOKEN){showLogin();return;}
+  try{ const r=await api('/api/voice',{method:'POST',body:JSON.stringify({wake:true,text:''})});
+    addMsg('friday',r.speech); hands=true; setHands();
+    speak(r.speech, ()=>startListen());
+  }catch(e){ setStatus(e.message);} }
+
+function pushToTalk(){ if(!TOKEN){showLogin();return;} hands=false; setHands(); startListen(); }
+function standDown(){ hands=false; setHands(); stopListen(); speechSynthesis.cancel(); speaking=false; setOrb('idle'); setStatus('stopped'); }
+function setHands(){$('handsState').textContent=hands?'on':'off';}
+async function sendText(){ const t=$('txt').value.trim(); if(!t)return; $('txt').value=''; if(!TOKEN){showLogin();return;} onHeard(t); }
+
+if(!TOKEN) showLogin();
+</script>
