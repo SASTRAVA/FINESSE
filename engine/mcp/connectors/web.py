@@ -5,7 +5,9 @@ Available to marketing / bizdev / general lanes (fresh market/company data).
 from __future__ import annotations
 import re
 import html
+import asyncio
 from ..base import Tool, ToolResult, mcp
+from ...network_safety import validate_public_target_url
 
 
 class WebSearch(Tool):
@@ -31,6 +33,15 @@ class WebSearch(Tool):
                     "User-Agent": "Mozilla/5.0 (compatible; SastravaFinesse/0.1)"}) as c:
                 r = await c.post("https://html.duckduckgo.com/html/", data={"q": query})
             results = self._parse(r.text, int(max_results or 5))
+            safe_results = []
+            for result in results:
+                try:
+                    await asyncio.to_thread(
+                        validate_public_target_url, result.get("url", ""))
+                except ValueError:
+                    continue
+                safe_results.append(result)
+            results = safe_results
             if not results:
                 return ToolResult(True, data=[], error="no results parsed")
             return ToolResult(True, data=results)

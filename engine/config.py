@@ -65,6 +65,10 @@ class Config:
     TRUSTED_PROXY_IPS = _ips("TRUSTED_PROXY_IPS")
     ALLOW_UNENCRYPTED_PUBLIC_BIND = _b(
         "ALLOW_UNENCRYPTED_PUBLIC_BIND", "false").lower() in ("1", "true", "yes")
+    REDIS_URL = _b("REDIS_URL")
+    SALES_DRY_RUN = _b("SALES_DRY_RUN", "true").lower() in ("1", "true", "yes")
+    SALES_LIVE_OUTREACH_ENABLED = _b(
+        "SALES_LIVE_OUTREACH_ENABLED", "false").lower() in ("1", "true", "yes")
     VAULT = (ROOT / _b("VAULT_PATH", "./vault")).resolve()
     DATA = _rooted_path("FINESSE_DATA_DIR", "./data")
     UPLOADS = DATA / "uploads"

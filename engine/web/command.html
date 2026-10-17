@@ -125,6 +125,31 @@
       <h3>CRM Pipeline — human owns outreach</h3>
       <div id="pipe"></div>
     </div>
+    <div class="card">
+      <h3>Enterprise Command & Safety</h3>
+      <label>Natural-language command</label><textarea id="ent_command" maxlength="4000"></textarea>
+      <div class="row">
+        <button onclick="runEnterpriseCommand()">Parse</button>
+        <button onclick="runConjunction()">Conjunction plan</button>
+      </div>
+      <label>Service</label><select id="ent_service">
+        <option value="software_development">Software Development</option>
+        <option value="digital_marketing">Digital Marketing</option>
+        <option value="content_media">Content and Media</option>
+        <option value="edutech">Edutech</option>
+      </select>
+      <label>Geography</label><input id="ent_geo" maxlength="200"/>
+      <button onclick="generateSalesLeads()">Generate sandbox leads</button>
+      <label>Lead ID</label><input id="ent_lead_id" maxlength="100"/>
+      <button onclick="draftSalesEmail()">Preview email draft</button>
+      <label>Explicit voice command</label><input id="ent_voice_command" maxlength="1000"/>
+      <button onclick="previewVoiceCall()">Confirm sandbox call preview</button>
+      <pre id="ent_result" style="white-space:pre-wrap;max-height:220px;overflow:auto"></pre>
+      <h3>Conjunction, memory, catalog, security</h3>
+      <pre id="ent_status" style="white-space:pre-wrap;max-height:160px;overflow:auto"></pre>
+      <button onclick="loadEnterprisePanel()">Refresh status</button>
+      <button class="hot" onclick="emergencyStop()">Emergency stop</button>
+    </div>
   </div>
 
   <!-- RIGHT: live feed + audit -->
@@ -154,7 +179,8 @@ async function boot(){
   if((ME.tier||1)<3){$("login").style.display="none";$("gate").style.display="grid";return;}
   $("login").style.display="none";$("gate").style.display="none";$("wrap").style.display="grid";
   $("who").textContent=ME.role+" · TIER "+ME.tier;
-  await refresh(); await loadAgents(); await loadAudit(); await loadSastravaCatalog(); connectWS();
+  await refresh(); await loadAgents(); await loadAudit(); await loadSastravaCatalog();
+  await loadEnterprisePanel(); connectWS();
   setInterval(refresh,8000);
 }
 async function refresh(){
@@ -192,6 +218,48 @@ async function loadAgents(){const {agents}=await api("/api/agents");
 async function loadSastravaCatalog(){try{const c=await api("/api/sastrava/catalog");
   $("sc_service").innerHTML=c.services.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join("");
 }catch(e){$("sc_msg").textContent=e.message;}}
+async function loadEnterprisePanel(){try{
+  const [catalog,tools,patterns]=await Promise.all([
+    api("/api/v1/catalog/repositories"),api("/api/v1/security/tools"),
+    api("/api/v1/memory/patterns")]);
+  $("ent_status").textContent=
+    `Graph stages: LISTEN → SHAPE → DELIVER → VERIFY → MEMORIZE\n`+
+    `Repo candidates: ${catalog.repositories.length} · DISCOVERED only\n`+
+    `Security registry: ${tools.tools.length} · all auto_execute=false\n`+
+    `Learned macros for this user: ${patterns.learned_macro_tools.length}\n`+
+    `Email, telephony, scanner execution: dry-run only`;
+}catch(e){$("ent_status").textContent=e.message;}}
+async function runEnterpriseCommand(){try{
+  const result=await api("/api/v1/agent/commands",{method:"POST",
+    body:JSON.stringify({command:$("ent_command").value,tainted:false})});
+  $("ent_result").textContent=JSON.stringify(result,null,2);
+}catch(e){$("ent_result").textContent=e.message;}}
+async function runConjunction(){try{
+  const result=await api("/api/v1/orchestra/conjunction",{method:"POST",
+    body:JSON.stringify({command:$("ent_command").value,tainted:false})});
+  $("ent_result").textContent=JSON.stringify(result,null,2);
+}catch(e){$("ent_result").textContent=e.message;}}
+async function generateSalesLeads(){try{
+  const result=await api("/api/v1/leads/generate",{method:"POST",body:JSON.stringify({
+    service_id:$("ent_service").value,geography:$("ent_geo").value,count:5})});
+  if(result.leads.length)$("ent_lead_id").value=result.leads[0].id;
+  $("ent_result").textContent=JSON.stringify(result,null,2);
+}catch(e){$("ent_result").textContent=e.message;}}
+async function draftSalesEmail(){try{
+  const result=await api("/api/v1/email/preview",{method:"POST",body:JSON.stringify({
+    lead_id:$("ent_lead_id").value,service_id:$("ent_service").value})});
+  $("ent_result").textContent=JSON.stringify(result,null,2);
+}catch(e){$("ent_result").textContent=e.message;}}
+async function previewVoiceCall(){const command=$("ent_voice_command").value.trim();
+  if(!command||!window.confirm("No external phone call will be made. Continue with a preview?"))return;
+  try{const result=await api("/api/v1/voice/commands",{method:"POST",
+    body:JSON.stringify({command,tainted:false})});
+    $("ent_result").textContent=JSON.stringify(result,null,2);
+  }catch(e){$("ent_result").textContent=e.message;}}
+async function emergencyStop(){if(!window.confirm("Stop all state-changing platform tools?"))return;
+  try{const result=await api("/api/admin/emergency-stop",{method:"POST",body:"{}"});
+    $("ent_status").textContent="Emergency stop active: "+result.active;
+  }catch(e){$("ent_status").textContent=e.message;}}
 async function runSastravaIntake(){const brief=$("sc_brief").value.trim();
   if(!brief){$("sc_msg").textContent="enter a client brief";return;}
   $("sc_msg").textContent="working…";$("sc_out").style.display="none";

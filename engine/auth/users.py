@@ -7,6 +7,7 @@ so you can "map by employee data usage" as requested.
 """
 from __future__ import annotations
 import json
+import re
 import time
 from dataclasses import dataclass, asdict, field
 from pathlib import Path
@@ -36,6 +37,7 @@ class User:
     role: str
     pw_hash: str
     tier: int = 1
+    tenant_id: str = "default"
     created: float = field(default_factory=time.time)
     usage: dict = field(default_factory=lambda: {"logins": 0, "directives": 0,
                                                   "injections": 0, "tokens_est": 0})
@@ -79,15 +81,20 @@ class UserStore:
     def get(self, email: str) -> Optional[User]:
         return self._users.get(email.lower())
 
-    def create(self, email: str, name: str, role: str, password: str) -> User:
+    def create(self, email: str, name: str, role: str, password: str,
+               tenant_id: str = "default") -> User:
         validate_password_strength(password)
+        tenant_id = tenant_id.strip()
+        if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,127}", tenant_id):
+            raise ValueError("tenant_id must use lowercase letters, digits, hyphens, or underscores")
         email = email.lower()
         if email in self._users:
             raise ValueError("user exists")
         r = role_of(role)
         if role == "CEO":
             raise ValueError("CEO is a singleton admin and cannot be created")
-        u = User(email=email, name=name, role=role, pw_hash=hash_pw(password), tier=r.tier)
+        u = User(email=email, name=name, role=role, pw_hash=hash_pw(password), tier=r.tier,
+                 tenant_id=tenant_id)
         self._users[email] = u
         self.save()
         return u
@@ -114,8 +121,9 @@ class UserStore:
             u.usage[key] = u.usage.get(key, 0) + n
             self.save()
 
-    def all_public(self) -> list[dict]:
-        return [u.public() for u in self._users.values()]
+    def all_public(self, tenant_id: str | None = None) -> list[dict]:
+        return [u.public() for u in self._users.values()
+                if tenant_id is None or u.tenant_id == tenant_id]
 
 
 users = UserStore()

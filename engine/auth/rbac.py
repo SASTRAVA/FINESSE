@@ -87,6 +87,22 @@ ROLES: dict[str, RoleDef] = {
         ["inject", "spawn:general", "read:general"]),
     "Trainer": RoleDef("Trainer", 1, LANE_GENERAL, ["inject", "spawn:general", "read:general"]),
     "Legal Advisor": RoleDef("Legal Advisor", 1, LANE_GENERAL, ["inject", "read:legal"]),
+    "Sales Manager": RoleDef("Sales Manager", 2, LANE_BIZDEV,
+                             ["orchestrate:bizdev", "inject", "spawn:bizdev",
+                              "read:bizdev", "view:analytics"]),
+    "Sales Representative": RoleDef("Sales Representative", 1, LANE_BIZDEV,
+                                    ["inject", "spawn:bizdev", "read:bizdev"]),
+    "Analyst": RoleDef("Analyst", 1, LANE_GENERAL, ["view:analytics"]),
+    "Administrator": RoleDef("Administrator", 3, LANE_EXEC,
+                             ["orchestrate", "read:all", "inject", "spawn:any",
+                              "view:analytics"]),
+    "admin": RoleDef("admin", 2, LANE_BIZDEV, ["view:analytics", "sales:admin"]),
+    "sales_manager": RoleDef("sales_manager", 2, LANE_BIZDEV,
+                             ["orchestrate:bizdev", "inject", "spawn:bizdev",
+                              "read:bizdev", "view:analytics"]),
+    "sales_rep": RoleDef("sales_rep", 1, LANE_BIZDEV,
+                         ["inject", "spawn:bizdev", "read:bizdev"]),
+    "analyst": RoleDef("analyst", 1, LANE_GENERAL, ["view:analytics"]),
 }
 
 LANE_OF_ROLE = {name: r.lane for name, r in ROLES.items()}

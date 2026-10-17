@@ -53,7 +53,8 @@ class Agent:
     async def run(self, task: str, *, context_query: str | None = None,
                   extra_context: str = "", user_id: str = "",
                   user_role: str | None = None,
-                  sensitivity: str = "internal", inherited_taint: bool = False) -> AgentResult:
+                  sensitivity: str = "internal", inherited_taint: bool = False,
+                  tenant_id: str = "default") -> AgentResult:
         from ..orchestra.events import bus
         from ..orchestra.memory import shared_memory
 
@@ -66,7 +67,7 @@ class Agent:
 
         ctx_info = await retriever.context_details(
             context_query or task, role=user_role or self.spec.lane,
-            user_id=user_id, limit=5)
+            user_id=user_id, tenant_id=tenant_id, limit=5)
         tainted = inherited_taint or ctx_info["tainted"]
         sensitivity_order = ("public", "internal", "confidential", "restricted")
         requested_sensitivity = sensitivity
@@ -98,7 +99,8 @@ class Agent:
                 nonlocal tainted
                 res = await mcp.dispatch(name, args, lane=self.spec.lane, actor=self.id,
                                          tainted=tainted, user_id=user_id,
-                                         user_role=user_role or self.spec.lane)
+                                         user_role=user_role or self.spec.lane,
+                                         tenant_id=tenant_id)
                 if (res.sensitivity in ("confidential", "restricted")
                         and ctx_info["sensitivity"] not in ("confidential", "restricted")
                         and not cfg.ALLOW_CONFIDENTIAL_EXTERNAL_EGRESS):
@@ -131,13 +133,13 @@ class Agent:
                        trace=self.trace, chars=len(output), steps=steps)
 
         # Keep learned patterns within this user's lane-scoped memory.
-        if self.spec.learns and len(output) > 200:
+        if self.spec.learns and len(output) > 200 and not tainted:
             headline = output.strip().split("\n", 1)[0][:300]
             await shared_memory.learn_pattern(
                 pattern=f"[{self.spec.title}] {headline}",
                 role=self.spec.lane, actor=self.id, trace=self.trace,
                 user_id=user_id, lane=self.spec.lane, tainted=tainted,
-                sensitivity=ctx_info["sensitivity"])
+                sensitivity=ctx_info["sensitivity"], tenant_id=tenant_id)
 
         return AgentResult(self.id, self.spec.key, output, elapsed,
                            self.spec.base_confidence, steps=steps,

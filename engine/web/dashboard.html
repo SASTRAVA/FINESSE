@@ -182,6 +182,37 @@
     <div class="cols"><div class="card"><h3>Core</h3><div id="sysFull"></div></div>
       <div class="card"><h3>MCP Tools</h3><div id="toolsList"></div></div></div>
   </div>
+  <div class="panel" id="p-enterprise">
+    <h3 class="glow">UNIFIED CONJUNCTION · SALES · GOVERNANCE</h3>
+    <div class="cols">
+      <div class="card">
+        <label>Authenticated user command</label>
+        <textarea id="enterprise_command" maxlength="4000"></textarea>
+        <div class="row">
+          <button onclick="runEnterpriseCommand()">Parse command</button>
+          <button onclick="runConjunction()">Route conjunction</button>
+        </div>
+        <pre class="out" id="enterprise_result" style="white-space:pre-wrap"></pre>
+      </div>
+      <div class="card">
+        <label>Sales service</label><select id="enterprise_service"></select>
+        <label>Geography</label><input id="enterprise_geography" maxlength="200"/>
+        <label>Count</label><input id="enterprise_count" type="number" min="1" max="100" value="5"/>
+        <button onclick="generateEnterpriseLeads()">Generate sandbox leads</button>
+        <label>Lead ID</label><input id="enterprise_lead_id" maxlength="100"/>
+        <button onclick="previewEnterpriseEmail()">Preview email draft</button>
+        <label>Explicit voice command</label>
+        <input id="enterprise_voice_command" maxlength="1000"
+               placeholder="Call software development leads in campaign 123"/>
+        <button onclick="previewEnterpriseVoice()">Confirm call preview</button>
+      </div>
+      <div class="card">
+        <h3>Certification & safeguards</h3>
+        <div id="enterprise_status" class="out" style="white-space:pre-wrap"></div>
+        <button onclick="loadEnterpriseStatus()">Refresh status</button>
+      </div>
+    </div>
+  </div>
 </div>
 
 <div id="tabbar" style="display:none">
@@ -191,6 +222,7 @@
   <div class="tab" data-tab="consult"><span class="ic">◎</span><span class="lb">CONSULT</span></div>
   <div class="tab" data-tab="feed"><span class="ic">◆</span><span class="lb">FEED</span></div>
   <div class="tab" data-tab="system"><span class="ic">▤</span><span class="lb">SYSTEM</span></div>
+  <div class="tab" data-tab="enterprise"><span class="ic">⬡</span><span class="lb">ENTERPRISE</span></div>
   <div class="tab" id="tab-command" data-tab="command" style="display:none"><span class="ic">★</span><span class="lb">COMMAND</span></div>
 </div>
 
@@ -220,7 +252,7 @@ async function boot(){
   if(ME.tier>=3)$("tab-command").style.display="flex";
   renderLegend();
   try{const am=await api("/api/agents");AGENTS=am.agents;renderAgents();}catch(e){}
-  loadSastravaCatalog();
+  loadSastravaCatalog();loadEnterpriseStatus();
   try{const g=await api("/api/graph");$("netPill").textContent=g.stats.nodes+" nodes";renderGraph(g);}catch(e){}
   await refresh();if(ME.tier>=3)connectWS();loadSwarms();
   setInterval(refresh,8000);setInterval(loadSwarms,4000);
@@ -260,6 +292,47 @@ function renderAgents(){$("agentGrid").innerHTML=AGENTS.map(a=>{const c=LC[a.lan
 async function loadSastravaCatalog(){try{const catalog=await api("/api/sastrava/catalog");
   $("consult_service").innerHTML=catalog.services.map(s=>`<option value="${s.id}">${s.name}</option>`).join("");
 }catch(e){$("consult_msg").textContent=e.message;}}
+async function loadEnterpriseStatus(){try{
+  const [services,catalog]=await Promise.all([
+    api("/api/v1/services"),api("/api/v1/catalog/repositories")]);
+  $("enterprise_service").innerHTML=services.services.map(s=>
+    `<option value="${esc(s.id)}">${esc(s.name)}</option>`).join("");
+  let tools=0;try{const registry=await api("/api/v1/security/tools");tools=registry.tools.length;}
+  catch(e){tools="restricted";}
+  $("enterprise_status").textContent=
+    `Conjunction: deterministic review-only fallback\n`+
+    `Repo seeds: ${catalog.repositories.length} · status DISCOVERED only\n`+
+    `Security tools: ${tools} · auto-execution disabled\n`+
+    `External email/voice/scans: disabled`;
+}catch(e){$("enterprise_status").textContent=e.message;}}
+async function runEnterpriseCommand(){const command=$("enterprise_command").value.trim();
+  try{const result=await api("/api/v1/agent/commands",{method:"POST",
+    body:JSON.stringify({command,tainted:false})});
+    $("enterprise_result").textContent=JSON.stringify(result,null,2);
+  }catch(e){$("enterprise_result").textContent=e.message;}}
+async function runConjunction(){const command=$("enterprise_command").value.trim();
+  try{const result=await api("/api/v1/orchestra/conjunction",{method:"POST",
+    body:JSON.stringify({command,tainted:false})});
+    $("enterprise_result").textContent=JSON.stringify(result,null,2);
+  }catch(e){$("enterprise_result").textContent=e.message;}}
+async function generateEnterpriseLeads(){try{
+  const result=await api("/api/v1/leads/generate",{method:"POST",body:JSON.stringify({
+    service_id:$("enterprise_service").value,geography:$("enterprise_geography").value,
+    count:Number($("enterprise_count").value)})});
+  if(result.leads.length)$("enterprise_lead_id").value=result.leads[0].id;
+  $("enterprise_result").textContent=JSON.stringify(result,null,2);
+}catch(e){$("enterprise_result").textContent=e.message;}}
+async function previewEnterpriseEmail(){try{
+  const result=await api("/api/v1/email/preview",{method:"POST",body:JSON.stringify({
+    lead_id:$("enterprise_lead_id").value,service_id:$("enterprise_service").value})});
+  $("enterprise_result").textContent=JSON.stringify(result,null,2);
+}catch(e){$("enterprise_result").textContent=e.message;}}
+async function previewEnterpriseVoice(){const command=$("enterprise_voice_command").value.trim();
+  if(!command||!window.confirm("Queue a sandbox-only voice preview? No call will be placed."))return;
+  try{const result=await api("/api/v1/voice/commands",{method:"POST",
+    body:JSON.stringify({command,tainted:false})});
+    $("enterprise_result").textContent=JSON.stringify(result,null,2);
+  }catch(e){$("enterprise_result").textContent=e.message;}}
 async function runSastravaWorkflow(){
   const kind=$("consult_workflow").value, brief=$("consult_brief").value.trim();
   if(!brief){$("consult_msg").textContent="enter a brief";return;}

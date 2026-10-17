@@ -12,6 +12,7 @@ import re
 from ..llm import llm
 from ..mcp import mcp
 from ..knowledge.sastrava import SERVICES, infer_service_lines
+from ..config import cfg
 from ..orchestra.events import bus
 from .leads import crm, Lead
 
@@ -27,18 +28,43 @@ _SYS = ("You are Sastrava's Lead Generation Agent. From the provided web results
 
 
 async def generate_leads(*, icp: str, location: str, count: int = 5, owner: str = "",
-                         trace: str = "", sensitivity: str = "internal") -> list[dict]:
+                         trace: str = "", sensitivity: str = "internal",
+                         tenant_id: str = "default") -> list[dict]:
     await bus.emit("system", "leadgen", f"hunting {count} leads: '{icp}' in {location}", trace=trace)
+
+    if cfg.SALES_DRY_RUN:
+        from ..sales.lead_engine import generate_sandbox_leads
+        from ..sales.services_catalog import SERVICES as SANDBOX_SERVICES
+        ids = {service["id"] for service in SANDBOX_SERVICES}
+        service_id = next((service_id for service_id in infer_service_lines(icp)
+                           if service_id in ids), SANDBOX_SERVICES[0]["id"])
+        samples = generate_sandbox_leads(
+            service_id=service_id, geography=location or "unspecified",
+            industry=icp, count=min(count, 15), tenant_id=tenant_id)
+        leads_out = []
+        for sample in samples:
+            lead = crm.add(
+                company=sample["company"], name=sample["name"], location=sample["geography"],
+                industry=sample["industry"], need="Synthetic sandbox record; no prospect research performed.",
+                fit_score=sample["fit_score"], contact="", source="sandbox",
+                outreach_draft="", outreach_status="none", service_lines=infer_service_lines(icp),
+                owner=owner, status="new", tenant_id=tenant_id)
+            leads_out.append({"id": lead.id, "company": lead.label(),
+                              "location": lead.location, "fit_score": lead.fit_score,
+                              "service_lines": lead.service_lines, "synthetic": True})
+        await bus.emit("done", "leadgen", f"{len(leads_out)} synthetic sandbox records created",
+                       trace=trace, tenant_id=tenant_id)
+        return leads_out
 
     # 1. geo-scoped search (keyless web_search tool)
     q = f"{icp} companies in {location}"
     web = await mcp.dispatch("web_search", {"query": q, "max_results": max(count, 5)},
-                             lane="bizdev", actor="leadgen")
+                             lane="bizdev", actor="leadgen", tenant_id=tenant_id)
     web_txt = web.to_message() if web.ok else "(no web results)"
 
     # 2. brain context for fit
     ctx = await mcp.dispatch("vault_search", {"query": f"{icp} {location} client need offer"},
-                             lane="bizdev", actor="leadgen")
+                             lane="bizdev", actor="leadgen", tenant_id=tenant_id)
 
     # 3. extract structured leads
     user = (f"ICP: {icp}\nLocation: {location}\nCount: {count}\n\n"
@@ -76,7 +102,7 @@ async def generate_leads(*, icp: str, location: str, count: int = 5, owner: str 
             outreach_draft=item.get("outreach_draft", ""),
             outreach_status="draft" if item.get("outreach_draft") else "none",
             service_lines=service_lines,
-            owner=owner, status="new")
+            owner=owner, status="new", tenant_id=tenant_id)
         leads_out.append({"id": l.id, "company": l.label(), "location": l.location,
                           "fit_score": l.fit_score, "service_lines": l.service_lines})
         await bus.emit("learn", "leadgen", f"lead: {l.label()} ({l.location}) fit {l.fit_score:.2f}",

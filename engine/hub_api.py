@@ -94,9 +94,11 @@ def _parse_json(raw: str) -> dict:
     return {}
 
 
-def _vault_note(node_id: str, stmt: str, data: dict) -> None:
+def _vault_note(node_id: str, stmt: str, data: dict, tenant_id: str = "default") -> None:
     try:
-        d = cfg.VAULT / "09_Projects" / "_Innovation"
+        d = (cfg.VAULT / "09_Projects" / "_Innovation" if tenant_id == "default"
+             else cfg.VAULT / "_Tenants" / re.sub(r"[^\w\- ]", "_", tenant_id)[:128]
+             / "09_Projects" / "_Innovation")
         d.mkdir(parents=True, exist_ok=True)
         steps = "\n".join(f"{s.get('n')}. **{s.get('title')}** — {s.get('detail','')}"
                           for s in data.get("steps", []))
@@ -124,7 +126,8 @@ async def hub_token(form: OAuth2PasswordRequestForm = Depends()):
     u = users.authenticate(form.username, form.password)
     if u:
         login_throttle.succeeded(account=account)
-        return {"access_token": make_token(u.email, u.role, u.tier), "token_type": "bearer"}
+        return {"access_token": make_token(u.email, u.role, u.tier, u.tenant_id),
+                "token_type": "bearer"}
     login_throttle.failed(account=account)
     raise HTTPException(401, "Invalid credentials")
 
@@ -151,7 +154,8 @@ async def map_idea(stmt: str, user: dict, sensitivity: str = "internal") -> dict
         raise HTTPException(403, "not allowed to run innovation directives")
 
     ctx_info = await retriever.context_details(
-        stmt, role=user["role"], user_id=user["sub"], limit=2)
+        stmt, role=user["role"], user_id=user["sub"],
+        tenant_id=user.get("tenant_id", "default"), limit=2)
     ctx = ctx_info["text"][:900]
     order = ("public", "internal", "confidential", "restricted")
     egress_sensitivity = max((sensitivity, ctx_info["sensitivity"]), key=order.index)
@@ -173,16 +177,18 @@ async def map_idea(stmt: str, user: dict, sensitivity: str = "internal") -> dict
                "swarm_routing": {"plan": {"dispatch": {l: [f"{l}-swarm"] for l in lanes}}},
                "idea_metrics": {"composite": composite, "band": band},
                "ts": time.time(), "status": "mapped", "sensitivity": egress_sensitivity}
+    tenant_id = user.get("tenant_id", "default")
+    payload["tenant_id"] = tenant_id
     _NODES[node_id] = payload
 
     # feed the vault + the brain, then let the real agents act on it
-    await asyncio.to_thread(_vault_note, node_id, stmt, payload)
+    await asyncio.to_thread(_vault_note, node_id, stmt, payload, tenant_id)
     try:
         from .rag.ingest import ingest_text
         await ingest_text(f"INNOVATION IDEA: {stmt}\n\nStep graph:\n{json.dumps(steps)}",
                           title=f"idea:{stmt[:45]}", role=role_of(user["role"]).lane,
                           lane=role_of(user["role"]).lane, sensitivity=egress_sensitivity,
-                          injected_by=user["sub"], source="hub_idea")
+                          injected_by=user["sub"], source="hub_idea", tenant_id=tenant_id)
     except Exception:  # noqa: BLE001
         pass
     try:
@@ -190,7 +196,7 @@ async def map_idea(stmt: str, user: dict, sensitivity: str = "internal") -> dict
         asyncio.create_task(orchestrator.run_directive(
             f"Execute this mapped innovation: {stmt}",
             user_email=user["sub"], user_role=user["role"],
-            sensitivity=egress_sensitivity))
+            sensitivity=egress_sensitivity, tenant_id=tenant_id))
     except Exception:  # noqa: BLE001
         pass
     return payload
@@ -204,7 +210,10 @@ async def hub_problems(body: ProblemIn, user: dict = Depends(_current_user)):
 @router.get("/gatekeeper/queue")
 async def hub_queue(user: dict = Depends(_current_user)):
     _require_command_access(user)
-    return {"queue": sorted(_NODES.values(), key=lambda x: -x["ts"])[:50]}
+    tenant_id = user.get("tenant_id", "default")
+    queue = (node for node in _NODES.values()
+             if node.get("tenant_id", "default") == tenant_id)
+    return {"queue": sorted(queue, key=lambda x: -x["ts"])[:50]}
 
 
 @router.websocket("/gatekeeper/stream")
@@ -217,9 +226,12 @@ async def hub_stream(ws: WebSocket, token: str = ""):
         await ws.close(code=4403)
         return
     await ws.accept()
+    tenant_id = payload.get("tenant_id", "default")
     try:
         while True:
-            await ws.send_json({"queue": sorted(_NODES.values(), key=lambda x: -x["ts"])[:50]})
+            queue = (node for node in _NODES.values()
+                     if node.get("tenant_id", "default") == tenant_id)
+            await ws.send_json({"queue": sorted(queue, key=lambda x: -x["ts"])[:50]})
             await asyncio.sleep(3)
     except WebSocketDisconnect:
         pass

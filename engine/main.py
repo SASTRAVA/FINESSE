@@ -21,6 +21,7 @@ from __future__ import annotations
 import uuid
 import time
 import ipaddress
+import re
 from pathlib import Path
 from typing import Annotated
 
@@ -48,6 +49,9 @@ from .sastrava.workflows import (
     agent_allowed, build_consulting_directive, service_for,
 )
 from . import crawler
+from .db.storage import storage
+from .security.toolchain import erasure_certificate
+from .safety_state import activate_emergency_stop
 
 app = FastAPI(title="SASTRAVA FINESSE", version="0.1.0")
 app.add_middleware(
@@ -55,8 +59,8 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"], allow_headers=["*"])
 _bearer = HTTPBearer(auto_error=False)
 _WEB = Path(__file__).parent / "web"
-_LOGIN_LIMIT = 10
-_LOGIN_WINDOW_S = 60
+_LOGIN_LIMIT = 5
+_LOGIN_WINDOW_S = 900
 login_throttle = LoginThrottle(limit=_LOGIN_LIMIT, window_s=_LOGIN_WINDOW_S)
 
 
@@ -69,13 +73,13 @@ async def confidential_egress_blocked(_request: Request, exc: DataEgressBlocked)
 async def security_and_login_rate_limit(request, call_next):
     path = request.url.path
     client_ip = _client_ip(request)
-    if path in {"/api/login", "/hubapi/token"}:
+    if path in {"/api/login", "/hubapi/token", "/api/v1/auth/login"}:
         if not login_throttle.allowed(ip=client_ip):
             response = JSONResponse({"detail": "too many login attempts"}, status_code=429)
             response.headers.update(_security_headers(request))
             return response
     response = await call_next(request)
-    if path in {"/api/login", "/hubapi/token"}:
+    if path in {"/api/login", "/hubapi/token", "/api/v1/auth/login"}:
         if response.status_code == 401:
             login_throttle.failed(ip=client_ip)
         elif response.status_code < 400:
@@ -164,6 +168,7 @@ class NewUserIn(BaseModel):
     name: str
     role: str
     password: str
+    tenant_id: str = Field(default="default", pattern=r"^[a-z0-9][a-z0-9_-]{0,127}$")
 
 
 class InjectTextIn(BaseModel):
@@ -299,7 +304,7 @@ async def login(body: LoginIn):
         login_throttle.failed(account=account)
         raise HTTPException(401, "bad credentials")
     login_throttle.succeeded(account=account)
-    token = make_token(u.email, u.role, u.tier)
+    token = make_token(u.email, u.role, u.tier, u.tenant_id)
     await bus.emit("system", u.role, f"{u.name} logged in", lane=role_of(u.role).lane)
     return {"token": token, "user": u.public()}
 
@@ -319,6 +324,7 @@ async def change_password(body: ChangePasswordIn, user: dict = Depends(current_u
 async def me(user: dict = Depends(current_user)):
     u = users.get(user["sub"])
     return {"email": user["sub"], "role": user["role"], "tier": user["tier"],
+            "tenant_id": user.get("tenant_id", "default"),
             "lane": role_of(user["role"]).lane,
             "permissions": role_of(user["role"]).permissions,
             "usage": u.usage if u else {}}
@@ -327,10 +333,12 @@ async def me(user: dict = Depends(current_user)):
 # ---------- user management (CEO / COO) ----------
 @app.post("/api/users")
 async def create_user(body: NewUserIn, user: dict = Depends(require("read:all"))):
+    if user.get("tier", 0) < 3:
+        raise HTTPException(403, "user administration is restricted to executives")
     if body.role not in ROLES:
         raise HTTPException(400, f"unknown role. valid: {list(ROLES)}")
     try:
-        u = users.create(body.email, body.name, body.role, body.password)
+        u = users.create(body.email, body.name, body.role, body.password, body.tenant_id)
     except ValueError as e:
         raise HTTPException(400, str(e))
     return {"created": u.public()}
@@ -338,7 +346,9 @@ async def create_user(body: NewUserIn, user: dict = Depends(require("read:all"))
 
 @app.get("/api/users")
 async def list_users(user: dict = Depends(require("read:all"))):
-    return {"users": users.all_public()}
+    if user.get("tier", 0) < 3:
+        raise HTTPException(403, "user administration is restricted to executives")
+    return {"users": users.all_public(user.get("tenant_id", "default"))}
 
 
 @app.get("/api/roles")
@@ -352,7 +362,8 @@ async def inject_text_route(body: InjectTextIn, user: dict = Depends(require("in
     res = await ingest_text(body.text, title=body.title, role=role_of(user["role"]).lane,
                             lane=role_of(user["role"]).lane,
                             sensitivity=body.sensitivity,
-                            injected_by=user["sub"], source="prompt")
+                            injected_by=user["sub"], source="prompt",
+                            tenant_id=user.get("tenant_id", "default"))
     users.bump(user["sub"], "injections")
     return {"ok": True, "indexed": res}
 
@@ -376,7 +387,8 @@ async def inject_file_route(file: UploadFile = File(...),
         dest.write_bytes(content)
         res = await ingest_file(dest, role=role_of(user["role"]).lane,
                                 lane=role_of(user["role"]).lane,
-                                sensitivity=sensitivity, injected_by=user["sub"])
+                                sensitivity=sensitivity, injected_by=user["sub"],
+                                tenant_id=user.get("tenant_id", "default"))
         users.bump(user["sub"], "injections")
         return {"ok": True, "indexed": res}
     finally:
@@ -394,7 +406,7 @@ async def directive_route(body: DirectiveIn, user: dict = Depends(current_user))
     result = await orchestrator.run_directive(
         body.directive, user_email=user["sub"], user_role=user["role"],
         preferred_agents=body.agents, all_agents=body.all_agents,
-        sensitivity=body.sensitivity)
+        sensitivity=body.sensitivity, tenant_id=user.get("tenant_id", "default"))
     users.bump(user["sub"], "directives")
     return result
 
@@ -405,7 +417,7 @@ async def agent_run_route(body: AgentRunIn, user: dict = Depends(current_user)):
     try:
         result = await orchestrator.run_single_agent(
             body.agent_key, body.task, user_role=user["role"], user_id=user["sub"],
-            sensitivity=body.sensitivity)
+            sensitivity=body.sensitivity, tenant_id=user.get("tenant_id", "default"))
     except KeyError as e:
         raise HTTPException(404, str(e))
     except PermissionError as e:
@@ -491,8 +503,11 @@ async def tts_route(body: TTSIn, user: dict = Depends(current_user)):
 @app.get("/api/swarms")
 async def swarms_route(user: dict = Depends(current_user)):
     from .orchestra import sessions
-    return {"active": sessions.active(user_id=user["sub"], user_role=user["role"]),
-            "sessions": sessions.list(user_id=user["sub"], user_role=user["role"])}
+    tenant_id = user.get("tenant_id", "default")
+    return {"active": sessions.active(user_id=user["sub"], user_role=user["role"],
+                                      tenant_id=tenant_id),
+            "sessions": sessions.list(user_id=user["sub"], user_role=user["role"],
+                                      tenant_id=tenant_id)}
 
 
 def _hermes_stats():
@@ -503,6 +518,8 @@ def _hermes_stats():
 @app.get("/api/hermes")
 async def hermes_route(user: dict = Depends(require("read:all"))):
     """Hermes overseer state + evolution log (what skills/agents it has added)."""
+    if user.get("tenant_id", "default") != "default":
+        raise HTTPException(403, "platform-wide Hermes state is restricted to the default tenant")
     from .hermes import hermes
     return {"enabled": cfg.HERMES_ENABLED, "stats": hermes.stats,
             "log": list(reversed(hermes.log[-30:]))}
@@ -519,6 +536,8 @@ def require_security(user: dict = Depends(current_user)) -> dict:
 @app.post("/api/security/audit")
 async def security_audit_now(user: dict = Depends(require_security)):
     """Run a full security audit right now (evidence -> agent -> report)."""
+    if user.get("tenant_id", "default") != "default":
+        raise HTTPException(403, "platform-wide security auditing is restricted to the default tenant")
     from .security_watch import run_audit
     summary = await run_audit(actor=user["sub"])
     return {"ran": True, "score": summary["score"], "report": summary["report"],
@@ -529,6 +548,8 @@ async def security_audit_now(user: dict = Depends(require_security)):
 @app.get("/api/security/report")
 async def security_report(user: dict = Depends(require_security), limit: int = 5):
     """Latest security posture + recent reports from vault/22_Security."""
+    if user.get("tenant_id", "default") != "default":
+        raise HTTPException(403, "platform-wide security reports are restricted to the default tenant")
     sec = cfg.VAULT / "22_Security"
     posture = sec / "Security Posture.md"
     reports_dir = sec / "_Reports"
@@ -715,6 +736,8 @@ async def graph_route(user: dict = Depends(require("read:all")), max_notes: int 
     """The FULL living network — system core + agents + tools + every vault note +
     the Obsidian map — as one massive 3D graph payload. Built + serialized off the
     event loop and cached for a short window so concurrent dashboards never stall."""
+    if user.get("tenant_id", "default") != "default":
+        raise HTTPException(403, "global vault graph is not enabled for tenant-scoped accounts")
     import time as _t
     import anyio
     from fastapi import Response
@@ -737,6 +760,8 @@ async def agents_route(user: dict = Depends(current_user)):
 @app.get("/api/manifest")
 async def manifest_route(user: dict = Depends(current_user)):
     """The Karpathy wiring layer: domains, folders, engine data-paths, live roster."""
+    if user.get("tenant_id", "default") != "default":
+        raise HTTPException(403, "global vault manifest is not enabled for tenant-scoped accounts")
     from .obsidian.manifest import build_manifest
     return build_manifest()
 
@@ -762,7 +787,8 @@ async def tool_call_route(body: ToolCallIn, user: dict = Depends(current_user)):
         approval_token = make_gatekeeper_approval(user["sub"], body.name, body.args)
     res = await mcp.dispatch(body.name, body.args, lane=lane, actor=user["sub"],
                              approve_writes=may_approve, approval_token=approval_token,
-                             user_id=user["sub"], user_role=user["role"])
+                             user_id=user["sub"], user_role=user["role"],
+                             tenant_id=user.get("tenant_id", "default"))
     return {"ok": res.ok, "needs_human": res.needs_human, "error": res.error,
             "proposed_action": res.proposed_action,
             "data": res.data if not res.needs_human else None}
@@ -781,8 +807,10 @@ async def new_agent_route(body: NewAgentIn, user: dict = Depends(require("spawn:
 # ---------- CRM + lead generation ----------
 @app.get("/api/crm/pipeline")
 async def crm_pipeline(user: dict = Depends(require("read:bizdev"))):
-    return {"stages": STAGES, "stats": crm.stats(),
-            "by_stage": {s: [_lead_pub(l) for l in ls] for s, ls in crm.by_stage().items()}}
+    tenant_id = user.get("tenant_id", "default")
+    return {"stages": STAGES, "stats": crm.stats(tenant_id),
+            "by_stage": {s: [_lead_pub(l) for l in ls]
+                         for s, ls in crm.by_stage(tenant_id).items()}}
 
 
 @app.post("/api/crm/leads")
@@ -795,7 +823,8 @@ async def crm_add_lead(body: LeadIn, user: dict = Depends(require("spawn:bizdev"
     if not fields["service_lines"]:
         fields["service_lines"] = infer_service_lines(
             f"{body.need} {body.industry}")
-    l = crm.add(**fields, source="manual", owner=user["sub"], status="new")
+    l = crm.add(**fields, source="manual", owner=user["sub"], status="new",
+                tenant_id=user.get("tenant_id", "default"))
     return {"lead": _lead_pub(l)}
 
 
@@ -803,8 +832,10 @@ async def crm_add_lead(body: LeadIn, user: dict = Depends(require("spawn:bizdev"
 async def crm_generate(body: LeadGenIn, user: dict = Depends(require("spawn:bizdev"))):
     leads = await generate_leads(icp=body.icp, location=body.location,
                                  count=min(body.count, 15), owner=user["sub"],
-                                 sensitivity=body.sensitivity)
-    return {"generated": leads, "stats": crm.stats()}
+                                 sensitivity=body.sensitivity,
+                                 tenant_id=user.get("tenant_id", "default"))
+    return {"generated": leads, "stats": crm.stats(user.get("tenant_id", "default")),
+            "sandbox": cfg.SALES_DRY_RUN}
 
 
 @app.get("/api/sastrava/catalog")
@@ -827,7 +858,8 @@ async def _run_sastrava_workflow(*, user: dict, service_line: str, brief: str,
         workflow=workflow)
     result = await orchestrator.run_directive(
         directive, user_email=user["sub"], user_role=user["role"],
-        preferred_agents=[service["agent"]], sensitivity=sensitivity, consulting=True)
+        preferred_agents=[service["agent"]], sensitivity=sensitivity, consulting=True,
+        tenant_id=user.get("tenant_id", "default"))
     users.bump(user["sub"], "directives")
     return {"service_line": service_line, "method": "Listen → Shape → Deliver", **result}
 
@@ -864,7 +896,7 @@ async def sastrava_learning_plan(body: LearningPlanIn,
 
 @app.post("/api/crm/leads/{lead_id}/stage")
 async def crm_stage(lead_id: str, stage: str, user: dict = Depends(require("spawn:bizdev"))):
-    l = crm.set_stage(lead_id, stage)
+    l = crm.set_stage(lead_id, stage, user.get("tenant_id", "default"))
     if not l:
         raise HTTPException(404, "lead or stage invalid")
     return {"lead": _lead_pub(l)}
@@ -873,7 +905,7 @@ async def crm_stage(lead_id: str, stage: str, user: dict = Depends(require("spaw
 @app.post("/api/crm/leads/{lead_id}/approve-outreach")
 async def crm_approve(lead_id: str, user: dict = Depends(require("orchestrate"))):
     """The human-touch gateway: a person approves outreach before any contact."""
-    l = crm.approve_outreach(lead_id)
+    l = crm.approve_outreach(lead_id, user.get("tenant_id", "default"))
     if not l:
         raise HTTPException(404, "lead has no draft")
     await bus.emit("system", user["role"], f"outreach approved for {l.label()}")
@@ -890,6 +922,8 @@ def _lead_pub(l):
 # ---------- reweave (admin) ----------
 @app.post("/api/reweave")
 async def reweave_route(user: dict = Depends(require("read:all"))):
+    if user.get("tenant_id", "default") != "default":
+        raise HTTPException(403, "vault-wide reweaving is restricted to the default tenant")
     from .obsidian.weave import reweave
     import anyio
     stats = await anyio.to_thread.run_sync(reweave)
@@ -905,7 +939,7 @@ async def status_route(user: dict = Depends(current_user)):
         "brain_vectors": await store.count(),
         "agent_types": len(registry.all()),
         "tools": [t.name for t in mcp.all()],
-        "crm": crm.stats(),
+        "crm": crm.stats(user.get("tenant_id", "default")),
         "hermes": _hermes_stats(),
         "turboquant": turbo.stats(),
         "config": {"max_concurrent_llm": cfg.MAX_CONCURRENT_LLM,
@@ -922,6 +956,9 @@ async def ws(websocket: WebSocket, token: str = ""):
         await websocket.close(code=4401)
         return
     if payload.get("tier", 1) < 3:
+        await websocket.close(code=4403)
+        return
+    if payload.get("tenant_id", "default") != "default":
         await websocket.close(code=4403)
         return
     await websocket.accept()
@@ -974,7 +1011,7 @@ class DiagramIn(BaseModel):
 async def diagram_route(body: DiagramIn, user: dict = Depends(current_user)):
     """Generate an analytical Mermaid diagram for any topic."""
     from .jarvis_brain import make_diagram
-    code = await make_diagram(body.topic)
+    code = await make_diagram(body.topic, tenant_id=user.get("tenant_id", "default"))
     return {"topic": body.topic, "mermaid": code}
 
 
@@ -982,9 +1019,12 @@ async def diagram_route(body: DiagramIn, user: dict = Depends(current_user)):
 async def innovation_feed(user: dict = Depends(require("read:all"))):
     """Recent research briefs + generated diagrams for the Innovation Hub."""
     items = []
+    tenant_id = user.get("tenant_id", "default")
     for folder, kind in (("11_Knowledge_Base/_Research", "research"),
                          ("14_Dashboards/_Diagrams", "diagram")):
-        d = cfg.VAULT / folder
+        d = (cfg.VAULT / folder if tenant_id == "default" else
+             cfg.VAULT / "_Tenants" / re.sub(r"[^\w\- ]", "_", tenant_id)[:128]
+             / Path(folder))
         if d.exists():
             for p in sorted(d.glob("*.md"), key=lambda x: x.stat().st_mtime, reverse=True)[:8]:
                 items.append({"kind": kind, "name": p.stem, "ts": p.stat().st_mtime,
@@ -1018,6 +1058,8 @@ async def command_center():
 @app.get("/api/audit")
 async def audit_route(user: dict = Depends(require_tier(3)), limit: int = 100):
     """Recent audit log — command center only."""
+    if user.get("tenant_id", "default") != "default":
+        raise HTTPException(403, "platform-wide audit logs are restricted to the default tenant")
     path = cfg.DATA / "audit.jsonl"
     if not path.exists():
         return {"audit": []}
@@ -1061,6 +1103,31 @@ async def health():
 # the galaxy's backend, powered entirely by FINESSE agents
 from .hub_api import router as _hub_router  # noqa: E402
 app.include_router(_hub_router)
+from .sales.router_v1 import router as _sales_router  # noqa: E402
+app.include_router(_sales_router)
+
+
+@app.post("/api/admin/emergency-stop")
+async def activate_emergency_stop_route(user: dict = Depends(current_user)):
+    if user.get("tier", 0) < 4:
+        raise HTTPException(403, "only the CEO can activate the emergency stop")
+    activate_emergency_stop()
+    return {"active": True}
+
+
+@app.delete("/api/sastrava/scans/{scan_id}/evidence")
+async def erase_scan_evidence(scan_id: str, user: dict = Depends(current_user)):
+    if not can(user.get("role", ""), "orchestrate:security"):
+        raise HTTPException(403, "security permission is required")
+    tenant_id = str(user.get("tenant_id") or "default")
+    evidence = [record for record in storage.list("scan_evidence", tenant_id, limit=1000)
+                if record.get("scan_id") == scan_id]
+    count = 0
+    for record in evidence:
+        record_id = str(record.get("id", ""))
+        if record_id and storage.delete("scan_evidence", tenant_id, record_id):
+            count += 1
+    return erasure_certificate(tenant_id=tenant_id, scan_id=scan_id, evidence_count=count)
 
 
 # ---------- SASTRAVA Innovation Hub (the galaxy) served INSIDE finesse ----------

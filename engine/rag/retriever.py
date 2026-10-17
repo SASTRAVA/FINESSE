@@ -25,7 +25,7 @@ def _lexical(query: str, text: str) -> float:
 class Retriever:
     async def retrieve(self, query: str, *, role: Optional[str] = None,
                        lane: Optional[str] = None, user_id: str = "",
-                       limit: int = 6) -> List[dict]:
+                       tenant_id: str = "default", limit: int = 6) -> List[dict]:
         principal = role or lane or "general"
         allowed_lanes = permitted_lanes(principal)
         if lane is not None:
@@ -38,7 +38,9 @@ class Retriever:
         clearance = sensitivity_order.index(max_sensitivity(principal))
         raw = []
         for allowed_lane in lanes:
-            raw.extend(await store.search(query, limit=limit * 3, flt={"lane": allowed_lane}))
+            raw.extend(await store.search(
+                query, limit=limit * 3,
+                flt={"lane": allowed_lane, "tenant_id": tenant_id}))
 
         results = []
         seen = set()
@@ -46,6 +48,8 @@ class Retriever:
             chunk_lane = payload.get("lane")
             sensitivity = payload.get("sensitivity")
             if chunk_lane not in lanes or sensitivity not in sensitivity_order:
+                continue
+            if payload.get("tenant_id", "default") != tenant_id:
                 continue
             if sensitivity_order.index(sensitivity) > clearance:
                 continue
@@ -72,14 +76,18 @@ class Retriever:
 
     async def context(self, query: str, *, role: Optional[str] = None,
                       lane: Optional[str] = None, user_id: str = "",
-                      limit: int = 6, max_chars: int = 4000) -> str:
+                      tenant_id: str = "default", limit: int = 6,
+                      max_chars: int = 4000) -> str:
         return (await self.context_details(query, role=role, lane=lane, user_id=user_id,
-                                           limit=limit, max_chars=max_chars))["text"]
+                                           tenant_id=tenant_id, limit=limit,
+                                           max_chars=max_chars))["text"]
 
     async def context_details(self, query: str, *, role: Optional[str] = None,
                               lane: Optional[str] = None, user_id: str = "",
-                              limit: int = 6, max_chars: int = 4000) -> dict:
-        hits = await self.retrieve(query, role=role, lane=lane, user_id=user_id, limit=limit)
+                              tenant_id: str = "default", limit: int = 6,
+                              max_chars: int = 4000) -> dict:
+        hits = await self.retrieve(query, role=role, lane=lane, user_id=user_id,
+                                   tenant_id=tenant_id, limit=limit)
         blocks, total = [], 0
         sensitivity_order = ("public", "internal", "confidential", "restricted")
         sensitivity = "public"

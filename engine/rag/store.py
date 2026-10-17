@@ -55,6 +55,10 @@ class _MemoryBackend:
         self._pts = [point for point in self._pts if point[0] not in id_set]
         return before - len(self._pts)
 
+    def delete_tenant(self, tenant_id: str):
+        return self.delete([point_id for point_id, _, payload in self._pts
+                            if payload.get("tenant_id", "default") == tenant_id])
+
 
 class VectorStore:
     def __init__(self):
@@ -85,7 +89,8 @@ class VectorStore:
             self._mem = _MemoryBackend()
         self._ready = True
 
-    async def upsert(self, texts: List[str], payloads: List[dict], ids: Optional[List[str]] = None):
+    async def upsert(self, texts: List[str], payloads: List[dict],
+                     ids: Optional[List[str]] = None):
         if len(texts) != len(payloads):
             raise ValueError("every vector text must have exactly one payload")
         if ids is not None and len(ids) != len(texts):
@@ -98,6 +103,9 @@ class VectorStore:
                 raise ValueError("vector payload requires a recognized lane")
             if payload.get("sensitivity") not in allowed_sensitivity:
                 raise ValueError("vector payload requires a recognized sensitivity")
+            payload.setdefault("tenant_id", "default")
+            if payload.get("owner") and not payload.get("owner_sub"):
+                payload["owner_sub"] = payload["owner"]
         await self.init()
         vecs: list[list[float] | None] = [None] * len(texts)
         positions_by_sensitivity: dict[str, list[int]] = {}
@@ -124,19 +132,21 @@ class VectorStore:
         return ids
 
     async def search(self, query: str, limit: int = 6, flt: Optional[dict] = None,
-                     sensitivity: str = "confidential"):
+                     sensitivity: str = "confidential", tenant_id: str = "default"):
         await self.init()
         qv = await embedder.embed_one(query, sensitivity=sensitivity)
+        scoped_filter = dict(flt or {})
+        scoped_filter["tenant_id"] = tenant_id
         if self._client is not None:
             from qdrant_client.models import Filter, FieldCondition, MatchValue
             qfilter = None
-            if flt:
+            if scoped_filter:
                 qfilter = Filter(must=[FieldCondition(key=k, match=MatchValue(value=v))
-                                       for k, v in flt.items()])
+                                       for k, v in scoped_filter.items()])
             res = await self._client.search(self.name, query_vector=qv, limit=limit,
                                             query_filter=qfilter)
             return [(r.score, r.payload) for r in res]
-        return self._mem.search(qv, limit, flt)
+        return self._mem.search(qv, limit, scoped_filter)
 
     async def count(self) -> int:
         await self.init()
@@ -180,6 +190,29 @@ class VectorStore:
                 collection_name=self.name,
                 points_selector=PointIdsList(points=legacy_ids[start:start + 256]))
         return len(legacy_ids)
+
+    async def delete_tenant(self, tenant_id: str) -> int:
+        if not tenant_id:
+            raise ValueError("tenant_id is required")
+        await self.init()
+        if self._client is None:
+            return self._mem.delete_tenant(tenant_id)
+        from qdrant_client.models import Filter, FieldCondition, MatchValue, PointIdsList
+        scoped = Filter(must=[FieldCondition(key="tenant_id", match=MatchValue(value=tenant_id))])
+        point_ids = []
+        offset = None
+        while True:
+            points, offset = await self._client.scroll(
+                collection_name=self.name, scroll_filter=scoped, limit=256, offset=offset,
+                with_payload=False, with_vectors=False)
+            point_ids.extend(point.id for point in points)
+            if offset is None:
+                break
+        for start in range(0, len(point_ids), 256):
+            await self._client.delete(
+                collection_name=self.name,
+                points_selector=PointIdsList(points=point_ids[start:start + 256]))
+        return len(point_ids)
 
     def backend_name(self) -> str:
         return "qdrant" if self._client is not None else "memory"

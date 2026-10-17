@@ -16,7 +16,7 @@ from ..llm.provider import DataEgressBlocked
 class Swarm:
     async def run(self, agents_and_tasks: list[tuple], trace: str = "",
                   *, user_id: str = "", user_role: str = "",
-                  sensitivity: str = "internal") -> list[AgentResult]:
+                  sensitivity: str = "internal", tenant_id: str = "default") -> list[AgentResult]:
         """agents_and_tasks: list of (Agent, task_str)."""
         await bus.emit("system", "swarm", f"launching swarm of {len(agents_and_tasks)} agents",
                        trace=trace)
@@ -25,7 +25,7 @@ class Swarm:
             try:
                 return await agent.run(f"{UNTRUSTED_DATA_POLICY}\n\n{task}",
                                        user_id=user_id, user_role=user_role,
-                                       sensitivity=sensitivity)
+                                       sensitivity=sensitivity, tenant_id=tenant_id)
             except Exception as e:  # noqa: BLE001
                 if isinstance(e, DataEgressBlocked):
                     raise

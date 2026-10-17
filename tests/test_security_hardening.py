@@ -6,7 +6,9 @@ from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 
-from engine.auth.security import LoginThrottle, hash_pw, make_gatekeeper_approval, verify_pw
+from engine.auth.security import (
+    LoginThrottle, hash_pw, make_gatekeeper_approval, make_token, verify_pw,
+)
 from engine.auth.users import User, UserStore, validate_password_strength
 from engine.config import cfg, validate_startup_config
 from engine.llm.provider import DataEgressBlocked, LLM, scrub_outbound
@@ -15,6 +17,7 @@ from engine.prompt_guard import contains_injection_pattern, wrap_untrusted_conte
 from engine.rag.retriever import retriever
 from engine.orchestra.sessions import SessionRegistry
 from engine.rag.store import VectorStore
+from engine.crm.leads import CRM, Lead
 
 
 class _WriteTool(Tool):
@@ -105,15 +108,31 @@ class SecurityHardeningTests(unittest.TestCase):
     def test_session_state_is_private_to_owner_unless_executive(self):
         sessions = SessionRegistry()
         sessions.start("swarm", "ceo secret directive", "t1",
-                       requested_by="CEO", owner="ceo@example.test", lane="exec")
+                       requested_by="CEO", owner="ceo@example.test", lane="exec",
+                       tenant_id="tenant-a")
         sessions.start("swarm", "staff directive", "t2",
                        requested_by="Software Engineer", owner="staff@example.test",
-                       lane="coding")
+                       lane="coding", tenant_id="tenant-b")
         staff_view = sessions.list(user_id="staff@example.test",
-                                   user_role="Software Engineer")
-        executive_view = sessions.list(user_id="ceo@example.test", user_role="CEO")
+                                   user_role="Software Engineer", tenant_id="tenant-b")
+        executive_view = sessions.list(user_id="ceo@example.test", user_role="CEO",
+                                       tenant_id="tenant-a")
         self.assertEqual([item["owner"] for item in staff_view], ["staff@example.test"])
-        self.assertEqual(len(executive_view), 2)
+        self.assertEqual([item["owner"] for item in executive_view], ["ceo@example.test"])
+
+    def test_legacy_crm_views_are_tenant_scoped(self):
+        crm = CRM()
+        crm._leads = {
+            "a": Lead(id="a", company="Tenant A", tenant_id="tenant-a"),
+            "b": Lead(id="b", company="Tenant B", tenant_id="tenant-b"),
+        }
+        self.assertEqual([lead.id for lead in crm.all("tenant-a")], ["a"])
+        self.assertEqual(crm.stats("tenant-b")["total"], 1)
+        self.assertIsNone(crm.get("a", "tenant-b"))
+
+    def test_tenant_claim_rejects_ambiguous_path_identifiers(self):
+        with self.assertRaisesRegex(ValueError, "tenant_id"):
+            make_token("user@example.test", "Analyst", 1, "../tenant")
 
     def test_tainted_write_action_needs_verified_gatekeeper_approval(self):
         async def run():

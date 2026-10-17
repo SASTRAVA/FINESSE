@@ -21,9 +21,10 @@ filename path that could escape the upload directory. These are fixed in the
 current source. This update also remediates the four targeted tracks:
 identity/lane-isolated memory and RAG, taint-aware prompt-injection controls,
 sensitivity-aware LLM egress, and production configuration/network defaults.
-The remaining HIGH and MEDIUM items below still make an
-internet-facing or regulated production deployment inappropriate without
-further work.
+Tenant-scoped persistence, review-only conjunction planning, and sandbox-first
+sales foundations have since been added at source level. The remaining HIGH
+and MEDIUM items below still make an internet-facing or regulated production
+deployment inappropriate without further work.
 
 Local `.env` credentials, business/prospect data, vector databases, and both
 local vault folders are intentionally excluded from the public source
@@ -34,7 +35,8 @@ repository. No secret values or customer records are included in this report.
 ### 1. Request and intent routing
 
 The browser sends a request to FastAPI. Users authenticate through a password
-check backed by bcrypt; the server issues an HS256 JWT with a role and tier.
+check backed by bcrypt; the server issues an HS256 JWT with a role, tier, and
+tenant identifier.
 JARVIS can ask a configured model to classify a request into chat, research,
 build, lead-generation, security, diagram, or other actions. A direct directive
 can instead enter the orchestrator without the voice classifier.
@@ -59,6 +61,14 @@ Missing role context falls back to general-lane clearance, and legacy chunks
 without the required metadata are denied. Shared/global material is also
 subject to its sensitivity ceiling. The vault search tool receives the trusted
 lane from the server-side dispatcher, not from the model.
+
+Tenant identifiers are propagated through the agent, retrieval, memory, and
+tool paths. Tenant-owned CRM records and Hub queue entries are filtered, and
+tenant-specific generated notes use a dedicated vault subtree. Several global
+operator endpoints are intentionally unavailable to non-default tenants.
+Existing local data is treated as belonging to the default tenant unless
+explicitly migrated; this code does not provision or migrate an organization's
+data automatically.
 
 ### 3. Embeddings and vector storage
 
@@ -112,6 +122,11 @@ optional per-lane semaphores, retry/backoff, a small cache for low-temperature
 requests, and single-flight deduplication bound some inference pressure. These
 are mechanisms, not a throughput guarantee; no 30-user load test was run.
 
+The optional conjunction adapter selects among six deterministic,
+review-oriented workflow plans. It does not itself perform consulting,
+campaign delivery, repository certification, or security scans. External
+effects must go through separate integrations and approval gates.
+
 ### 5. Memory, output, and training
 
 Deliverables are written into the configured local Obsidian vault. Selected
@@ -127,6 +142,12 @@ The separate `training/` workflow exports examples and provides scripts and a
 notebook for manual QLoRA experiments. It is not invoked by the running API and
 does not automatically deploy a trained adapter. Training examples are
 excluded from the public repository.
+
+`engine/db/storage.py` persists tenant-keyed JSON records in SQLite. The
+PostgreSQL RLS migration is a template only and is not connected to the
+application. Legacy JSON stores and process-local event/approval/session state
+remain, so multi-process consistency and full tenant lifecycle management have
+not been established.
 
 ### 6. Voice and external data flow
 
@@ -163,6 +184,13 @@ continuously current statement of company policy. Operators should review
 changes before refreshing the RAG index; client-specific facts and confidential
 data must not be written into the public catalog.
 
+Safe-foundation sales flows generate deterministic synthetic leads by default
+(`SALES_DRY_RUN=true`). The older lead-generation route now follows that switch;
+it does not contact prospects or generate outreach drafts while dry-run is
+enabled. Email and voice routes prepare drafts/previews only, and security
+scan plans remain non-executing. Catalog seed repositories remain discovered
+examples until a source-evidence certification process approves them.
+
 ## Findings and required changes
 
 | ID | Severity | State | Finding / impact | Evidence and recommended action |
@@ -179,6 +207,7 @@ data must not be written into the public catalog.
 | H-5 | **HIGH** | **Remediated (source-level guardrails)** | A non-loopback production bind could expose the service without TLS proxy controls. | `engine/config.py` rejects non-loopback production `HOST` unless `TRUSTED_PROXY_IPS` is configured or `ALLOW_UNENCRYPTED_PUBLIC_BIND=true` is explicitly set. `engine/main.py` trusts forwarded headers only from allowlisted proxies and adds HSTS for verified HTTPS. FINESSE does not terminate TLS itself; deploy a correctly configured TLS proxy and firewall. |
 | H-6 | **HIGH** | Partially mitigated | The optional FRIDAY client must authenticate to FINESSE. Credentials can still be stored in its local JSON configuration as plaintext, even though the repository no longer contains credential defaults. | Prefer process environment variables or Windows Credential Manager, use a dedicated least-privilege account, and restrict the local config file's filesystem permissions. |
 | H-7 | **HIGH** | **Remediated (source-level controls)** | Authentication previously used process-local IP-only throttling and did not enforce a strong password lifecycle. | `engine/auth/security.py` and `engine/main.py` track failed attempts by IP and normalized account; trusted proxy rules prevent spoofed forwarded IPs. `engine/auth/users.py` enforces 12-character minimums, rejects known placeholders, and supports authenticated password rotation with a content-free audit event at `/api/auth/change-password`. Limits remain process-local; distributed throttling and account recovery remain deployment/future work. |
+| M-10 | **MEDIUM** | Partially mitigated | Tenant-aware foundations do not yet make every legacy store or operator workflow independently deployable per tenant. Existing local records default to the `default` tenant; JSON-backed account/CRM stores and process-local event state remain, and the PostgreSQL RLS migration is not wired to runtime persistence. | JWT tenant claims, tenant-filtered RAG/memory/CRM/session/Hub paths, tenant-keyed SQLite records, and tenant-specific deliverable paths are implemented. Complete data migration, organization lifecycle administration, multi-worker consistency, and tenant-isolation integration tests before treating FINESSE as a SaaS platform. |
 | M-1 | **MEDIUM** | Partially mitigated | The JSON user/CRM stores and in-memory event/session state are not transactional or multi-process safe. Session listings are now identity-scoped for non-executives, but state remains volatile and process-local. | Move shared records and sessions to a transactional database, define backup/restore and retention, and test multiple workers before scaling out. |
 | M-2 | **MEDIUM** | Open | Runtime error handling in some Hub persistence/dispatch paths suppresses exceptions and can return an idea result even when indexing or dispatch failed. | Return partial-failure status explicitly, log structured diagnostics without sensitive content, and make background task failures observable. |
 | M-3 | **MEDIUM** | Open | There is no comprehensive app test suite or model-quality evaluation. The new tests cover important authorization, upload, and retrieval guards, not end-to-end model correctness or concurrency. | Add CI, API/integration tests, role-isolation tests, model-output evaluations, and a reproducible load test. |
@@ -214,6 +243,15 @@ data must not be written into the public catalog.
   tool, and canonical argument hash before tainted write actions execute.
 - Added completion-provider credential/PII scrubbing and sensitivity-based
   local-only routing or an explicit pre-egress block for confidential data.
+- Extended tenant claims through orchestration, RAG, memory, tool dispatch,
+  sessions, Hub queues, and CRM; scoped generated deliverables and innovation
+  notes, while denying global vault/operator views to non-default tenants.
+- Added SQLite tenant-keyed record storage and a PostgreSQL RLS template. The
+  template is not an active PostgreSQL backend.
+- Added deterministic review-only conjunction plans and sandbox-first synthetic
+  lead generation. No live mail, calls, or security scans are enabled.
+- Fixed a sliding-window throttling bug where pre-limit checks erased failed
+  attempt counters before they could lock an account or IP.
 - Added `FINESSE_ENV`, fail-fast production secret validation, loopback
   `HOST`/`PORT` defaults, an environment-driven CORS allowlist, standard
   security headers, and in-memory login throttling.
@@ -230,7 +268,7 @@ data must not be written into the public catalog.
   and removed a personal email from the example environment file.
 - Expanded `.gitignore` to exclude runtime data, local vaults, training
   exports, local developer configuration, and the internal handoff file.
-- Added 27 security-hardening tests for RAG and memory isolation, prompt
+- Added 29 security-hardening tests for RAG and memory isolation, prompt
   injection, tainted writes, LLM/embedding/TTS egress, account/IP throttling,
   password rotation, legacy-vector audit/purge, production bind validation,
   proxy trust, and HSTS, alongside the existing API guards.
@@ -246,10 +284,11 @@ editor/agent configuration, `HANDOFF.md`, and the superseded
 
 ## Readiness conclusion
 
-The four requested hardening tracks are implemented and covered by focused
-regression tests. That does not certify the system as production-ready.
-Complete remaining HIGH/MEDIUM work—especially TLS/reverse-proxy deployment,
-distributed login throttling/password lifecycle, hosted embedding/TTS egress,
-and durable storage—before exposing FINESSE to untrusted networks or using it
-for regulated data. Re-index existing vector collections so new lane and
-sensitivity metadata is populated; legacy points are intentionally denied.
+The source-level hardening tracks and safe-platform foundations have regression
+coverage, but that does not certify the system as production-ready. Complete
+remaining HIGH/MEDIUM work—especially production TLS/reverse-proxy operations,
+distributed throttling, durable event/session state, full tenant lifecycle and
+data migration, document-parser resource limits, and model-quality evaluation—
+before exposing FINESSE to untrusted networks or using it for regulated data.
+Re-index existing vector collections so new lane and sensitivity metadata is
+populated; legacy points are intentionally denied.

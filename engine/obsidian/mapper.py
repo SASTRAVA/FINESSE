@@ -27,11 +27,13 @@ def _slug(s: str) -> str:
 
 
 def write_deliverable(directive: str, content: str, role: str, trace: str,
-                      agent_roles: list[str]) -> str:
-    _OUT.mkdir(parents=True, exist_ok=True)
+                      agent_roles: list[str], tenant_id: str = "default") -> str:
+    output_dir = (_OUT if tenant_id == "default" else
+                  cfg.VAULT / "_Tenants" / _slug(tenant_id) / "09_Projects" / "_Deliverables")
+    output_dir.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y%m%d-%H%M%S")
     title = f"{stamp}_{_slug(directive)[:50]}"
-    note = _OUT / f"{title}.md"
+    note = output_dir / f"{title}.md"
 
     links = " ".join(f"[[{r}]]" for r in dict.fromkeys(agent_roles))
     front = ("---\n"

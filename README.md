@@ -29,6 +29,39 @@ it stores selected text in the vector database for later retrieval. Separate
 QLoRA scripts and a notebook provide an optional, manually operated training
 workflow; they are not automatically run or deployed by the app.
 
+## Safe-platform foundations
+
+The enterprise additions are deliberately foundations, not a claim of a
+production SaaS deployment. Signed JWTs carry a `tenant_id`; new users default
+to the `default` tenant unless an authorized administrator assigns another
+tenant. Tenant identity is propagated through RAG, orchestration, memory,
+sessions, Hub queues, CRM views, and platform records. Tenant-specific
+deliverables are written under a tenant-scoped vault directory. Global vault,
+audit, and event-stream routes remain restricted to the default tenant rather
+than returning cross-tenant data.
+
+The conjunction engine selects review-only workflow plans and explicitly
+reports that it performed no external side effects. `engine/db/storage.py`
+provides SQLite JSON-record persistence with tenant-keyed reads/writes, and
+`migrations/001_multi_tenant_rls.sql` is a PostgreSQL RLS companion template;
+the application does not currently use PostgreSQL. Some legacy session,
+account, audit, and runtime state is still file-backed or process-local, so
+this is not yet a horizontally scaled multi-tenant service.
+
+Sales lead generation uses deterministic synthetic records while
+`SALES_DRY_RUN=true` (the default). It does not search for real prospects or
+create contact-ready outreach. Email and voice features create drafts or
+previews only; there are no live send/call adapters. Security tooling creates
+authorized review plans and does not run scans by default. Repository catalog
+seeds are marked discovered/source-inventory-only, not certified. Importing
+catalog candidates requires an explicit input file; no broad workspace scan is
+performed.
+
+Authenticated human-confirmed pattern learning is available at
+`POST /api/v1/memory/patterns`. The route requires an explicit
+`human_confirmed=true`, stores the authenticated tenant/owner/lane scope, and
+does not accept a taint override.
+
 ## SASTRAVA consulting workflows
 
 The consulting layer organizes work around six public service lines:
@@ -126,6 +159,12 @@ Edit `.env` locally:
    provider-bound messages, embeddings, and cloud TTS. Recognized API keys and
    bearer tokens are always redacted before external-provider requests.
 
+   `SALES_DRY_RUN=true` keeps legacy and enterprise lead generation on synthetic
+   records. Leave `SALES_LIVE_OUTREACH_ENABLED=false`; enabling it does not
+   configure a delivery provider, but it is reserved for explicitly reviewed
+   future adapters. The optional `REDIS_URL` enables shared login-throttle state;
+   without Redis, throttling is process-local.
+
 Requests and ingestion endpoints that accept data can include a `sensitivity`
 value (`public`, `internal`, `confidential`, or `restricted`); omitted values
 default to `internal`. Treat this label as a security boundary and classify
@@ -203,6 +242,9 @@ local testing, not production accounts.
 | `engine/auth/` | JWTs, password hashing, role and permission definitions |
 | `engine/agents/` | Agent prompts, registry, execution |
 | `engine/orchestra/` | Planning, concurrent agent runs, synthesis, event bus, memory |
+| `engine/db/storage.py` | Tenant-keyed SQLite JSON records and transaction helpers |
+| `engine/orchestra/langgraph_conjunction.py` | Deterministic review-only workflow planning |
+| `engine/sales/` | Synthetic sandbox sales flows, drafts, scoring, and tenant APIs |
 | `engine/rag/` | Embeddings, vector storage, retrieval, ingestion |
 | `engine/llm/` | Hosted/local model routing, retries, cache and concurrency bounds |
 | `engine/mcp/` | Lane-aware tools and approval gate for write tools |

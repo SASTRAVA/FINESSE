@@ -45,6 +45,7 @@ class Lead:
     outreach_draft: str = ""
     outreach_status: str = "none"   # none | draft | approved | sent
     owner: str = ""             # employee who owns the lead
+    tenant_id: str = "default"
     service_lines: list[str] = field(default_factory=list)
     created: float = field(default_factory=time.time)
 
@@ -78,40 +79,46 @@ class CRM:
     def add(self, **kw) -> Lead:
         return self.upsert(Lead(**kw))
 
-    def get(self, lead_id: str) -> Lead | None:
-        return self._leads.get(lead_id)
+    def get(self, lead_id: str, tenant_id: str = "default") -> Lead | None:
+        lead = self._leads.get(lead_id)
+        return lead if lead and lead.tenant_id == tenant_id else None
 
-    def set_stage(self, lead_id: str, stage: str) -> Lead | None:
-        l = self._leads.get(lead_id)
+    def set_stage(self, lead_id: str, stage: str, tenant_id: str = "default") -> Lead | None:
+        l = self.get(lead_id, tenant_id)
         if l and stage in STAGES:
             l.status = stage
             self.upsert(l)
         return l
 
-    def approve_outreach(self, lead_id: str) -> Lead | None:
-        l = self._leads.get(lead_id)
+    def approve_outreach(self, lead_id: str, tenant_id: str = "default") -> Lead | None:
+        l = self.get(lead_id, tenant_id)
         if l and l.outreach_draft:
             l.outreach_status = "approved"   # a human clicked approve; sending is still manual/connector
             self.upsert(l)
         return l
 
-    def all(self) -> list[Lead]:
-        return sorted(self._leads.values(), key=lambda x: -x.created)
+    def all(self, tenant_id: str = "default") -> list[Lead]:
+        return sorted((lead for lead in self._leads.values()
+                       if lead.tenant_id == tenant_id), key=lambda x: -x.created)
 
-    def by_stage(self) -> dict[str, list[Lead]]:
+    def by_stage(self, tenant_id: str = "default") -> dict[str, list[Lead]]:
         out = {s: [] for s in STAGES}
         for l in self._leads.values():
-            out.setdefault(l.status, []).append(l)
+            if l.tenant_id == tenant_id:
+                out.setdefault(l.status, []).append(l)
         return out
 
-    def stats(self) -> dict:
-        bs = self.by_stage()
-        return {"total": len(self._leads), **{s: len(bs.get(s, [])) for s in STAGES}}
+    def stats(self, tenant_id: str = "default") -> dict:
+        bs = self.by_stage(tenant_id)
+        return {"total": sum(len(leads) for leads in bs.values()),
+                **{s: len(bs.get(s, [])) for s in STAGES}}
 
     # ---- obsidian ----
     def _write_note(self, l: Lead):
-        _LEADS.mkdir(parents=True, exist_ok=True)
-        note = _LEADS / f"{_slug(l.label())}__{l.id}.md"
+        lead_dir = (_LEADS if l.tenant_id == "default"
+                    else cfg.VAULT / "21_CRM" / "_Tenants" / _slug(l.tenant_id) / "Leads")
+        lead_dir.mkdir(parents=True, exist_ok=True)
+        note = lead_dir / f"{_slug(l.label())}__{l.id}.md"
         service_tags = ", ".join(
             f"sastrava_{re.sub(r'[^a-z0-9_]+', '', line.lower())}"
             for line in l.service_lines if line)
@@ -137,19 +144,25 @@ class CRM:
         note.write_text(fm + body, encoding="utf-8")
 
     def rebuild_pipeline(self):
-        _PIPE.parent.mkdir(parents=True, exist_ok=True)
-        bs = self.by_stage()
-        parts = ["---\ntitle: CRM Pipeline\ntags: [crm, moc, pipeline]\n---\n",
-                 "# 🎯 CRM Pipeline\n",
-                 f"_{len(self._leads)} leads · human owns outreach._\n"]
-        for s in STAGES:
-            leads = bs.get(s, [])
-            parts.append(f"\n## {s.upper()} ({len(leads)})")
-            for l in leads:
-                parts.append(f"- [[{_slug(l.label())}__{l.id}]] — {l.location or '—'} · "
-                             f"fit {l.fit_score:.2f} · outreach:{l.outreach_status}")
-        parts.append("\n\n> [[SASTRAVA OS MAP]]\n")
-        _PIPE.write_text("\n".join(parts), encoding="utf-8")
+        tenants = {lead.tenant_id for lead in self._leads.values()} or {"default"}
+        for tenant_id in tenants:
+            pipeline = (_PIPE if tenant_id == "default" else
+                        cfg.VAULT / "21_CRM" / "_Tenants" / _slug(tenant_id) /
+                        "CRM Pipeline.md")
+            pipeline.parent.mkdir(parents=True, exist_ok=True)
+            bs = self.by_stage(tenant_id)
+            count = sum(len(leads) for leads in bs.values())
+            parts = ["---\ntitle: CRM Pipeline\ntags: [crm, moc, pipeline]\n---\n",
+                     "# 🎯 CRM Pipeline\n",
+                     f"_{count} leads · human owns outreach._\n"]
+            for s in STAGES:
+                leads = bs.get(s, [])
+                parts.append(f"\n## {s.upper()} ({len(leads)})")
+                for l in leads:
+                    parts.append(f"- [[{_slug(l.label())}__{l.id}]] — {l.location or '—'} · "
+                                 f"fit {l.fit_score:.2f} · outreach:{l.outreach_status}")
+            parts.append("\n\n> [[SASTRAVA OS MAP]]\n")
+            pipeline.write_text("\n".join(parts), encoding="utf-8")
 
 
 crm = CRM()

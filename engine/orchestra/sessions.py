@@ -22,6 +22,7 @@ class Session:
     requested_by: str = ""
     owner: str = ""
     lane: str = "general"
+    tenant_id: str = "default"
     status: str = "running"         # running | done | error
     agents: list[str] = field(default_factory=list)
     elapsed: float = 0.0
@@ -40,9 +41,11 @@ class SessionRegistry:
         self._list: list[Session] = []
 
     def start(self, kind: str, prompt: str, trace: str, requested_by: str = "",
-              owner: str = "", lane: str = "general") -> Session:
+              owner: str = "", lane: str = "general",
+              tenant_id: str = "default") -> Session:
         s = Session(id=uuid.uuid4().hex[:8], kind=kind, prompt=prompt, trace=trace,
-                    requested_by=requested_by, owner=owner, lane=lane)
+                    requested_by=requested_by, owner=owner, lane=lane,
+                    tenant_id=tenant_id)
         self._list.append(s)
         if len(self._list) > self._ring:
             self._list = self._list[-self._ring:]
@@ -55,17 +58,22 @@ class SessionRegistry:
         s.preview = preview[:240]
         s.status = status
 
-    def list(self, limit: int = 40, *, user_id: str = "", user_role: str = "") -> list[dict]:
-        visible = self._visible(user_id, user_role)
+    def list(self, limit: int = 40, *, user_id: str = "", user_role: str = "",
+             tenant_id: str = "default") -> list[dict]:
+        visible = self._visible(user_id, user_role, tenant_id)
         return [s.json() for s in reversed(visible[-limit:])]
 
-    def active(self, *, user_id: str = "", user_role: str = "") -> int:
-        return sum(1 for s in self._visible(user_id, user_role) if s.status == "running")
+    def active(self, *, user_id: str = "", user_role: str = "",
+               tenant_id: str = "default") -> int:
+        return sum(1 for s in self._visible(user_id, user_role, tenant_id)
+                   if s.status == "running")
 
-    def _visible(self, user_id: str, user_role: str) -> list[Session]:
+    def _visible(self, user_id: str, user_role: str, tenant_id: str) -> list[Session]:
+        tenant_sessions = [session for session in self._list
+                           if session.tenant_id == tenant_id]
         if role_of(user_role).tier >= 3:
-            return self._list
-        return [session for session in self._list if session.owner == user_id]
+            return tenant_sessions
+        return [session for session in tenant_sessions if session.owner == user_id]
 
 
 sessions = SessionRegistry()

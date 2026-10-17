@@ -21,9 +21,11 @@ class VaultSearch(Tool):
     }
 
     async def run(self, query: str, limit: int = 5, lane: str = "general",
-                  user_id: str = "", user_role: str = "") -> ToolResult:
+                  user_id: str = "", user_role: str = "",
+                  tenant_id: str = "default") -> ToolResult:
         hits = await retriever.retrieve(query, role=user_role or lane, lane=lane,
-                                        user_id=user_id, limit=min(int(limit or 5), 10))
+                                        user_id=user_id, tenant_id=tenant_id,
+                                        limit=min(int(limit or 5), 10))
         data = [{"title": h["payload"].get("title"), "score": round(h["score"], 3),
                  "text": h["payload"].get("text", "")[:600]} for h in hits]
         order = ("public", "internal", "confidential", "restricted")

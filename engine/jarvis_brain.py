@@ -88,10 +88,11 @@ async def _classify(text: str, sensitivity: str = "internal") -> dict:
 
 
 async def _chat(text: str, history_txt: str, role: str, user_id: str,
-                sensitivity: str = "internal") -> tuple[str, str]:
+                sensitivity: str = "internal", tenant_id: str = "default") -> tuple[str, str]:
     from .llm import llm
     from .rag import retriever
-    details = await retriever.context_details(text, role=role, user_id=user_id, limit=4)
+    details = await retriever.context_details(text, role=role, user_id=user_id,
+                                              tenant_id=tenant_id, limit=4)
     order = ("public", "internal", "confidential", "restricted")
     egress_sensitivity = max((sensitivity, details["sensitivity"]), key=order.index)
     answer = await llm.jarvis_say(
@@ -109,12 +110,16 @@ async def _research(topic: str, user: dict,
     from .mcp import mcp
     from .rag import retriever
     web = await mcp.dispatch("web_search", {"query": topic, "max_results": 6},
-                             lane="exec", actor=user["sub"])
+                             lane=role_of(user["role"]).lane, actor=user["sub"],
+                             user_id=user["sub"],
+                             user_role=user["role"],
+                             tenant_id=user.get("tenant_id", "default"))
     web_txt = (wrap_untrusted_content(
         "\n".join(f"- {r.get('title')} ({r.get('url')})" for r in (web.data or [])),
         "web_search") if web.ok and web.data else "(no fresh web results)")
     details = await retriever.context_details(
-        topic, role=user["role"], user_id=user["sub"], limit=4)
+        topic, role=user["role"], user_id=user["sub"],
+        tenant_id=user.get("tenant_id", "default"), limit=4)
     brain = details["text"]
     order = ("public", "internal", "confidential", "restricted")
     egress_sensitivity = max((sensitivity, details["sensitivity"]), key=order.index)
@@ -124,14 +129,18 @@ async def _research(topic: str, user: dict,
         f"Brief the CEO in 2-3 spoken sentences, grounded ONLY in these sources; note a full "
         f"brief is saved to the vault.", temperature=0.4, max_tokens=240,
         sensitivity=egress_sensitivity)
-    await asyncio.to_thread(_save_research, topic, web_txt, brain, briefing)
+    await asyncio.to_thread(_save_research, topic, web_txt, brain, briefing,
+                            user.get("tenant_id", "default"))
     return briefing, egress_sensitivity
 
 
-def _save_research(topic: str, web_txt: str, brain: str, briefing: str) -> None:
+def _save_research(topic: str, web_txt: str, brain: str, briefing: str,
+                   tenant_id: str = "default") -> None:
     from .config import cfg
     try:
-        d = cfg.VAULT / "11_Knowledge_Base" / "_Research"
+        d = (cfg.VAULT / "11_Knowledge_Base" / "_Research" if tenant_id == "default"
+             else cfg.VAULT / "_Tenants" / re.sub(r"[^\w\- ]", "_", tenant_id)[:128]
+             / "11_Knowledge_Base" / "_Research")
         d.mkdir(parents=True, exist_ok=True)
         safe = re.sub(r"[^\w\- ]", "_", topic)[:60] or "research"
         (d / f"{time.strftime('%Y%m%d-%H%M%S')}_{safe}.md").write_text(
@@ -163,21 +172,24 @@ _MERMAID_SYS = (
     "commentary. Keep node labels short and quote labels containing spaces.")
 
 
-async def make_diagram(topic: str, sensitivity: str = "internal") -> str:
+async def make_diagram(topic: str, sensitivity: str = "internal",
+                       tenant_id: str = "default") -> str:
     """Generate a Mermaid diagram-as-code for any topic (used by voice + the Innovation Hub)."""
     from .llm import llm
     code = await llm.jarvis_say(_MERMAID_SYS, f"Topic: {topic}\nMermaid code only.",
                                 temperature=0.2, max_tokens=520,
                                 sensitivity=sensitivity)
     code = re.sub(r"```(?:mermaid)?", "", code).strip().strip("`").strip()
-    await asyncio.to_thread(_save_diagram, topic, code)
+    await asyncio.to_thread(_save_diagram, topic, code, tenant_id)
     return code
 
 
-def _save_diagram(topic: str, code: str) -> None:
+def _save_diagram(topic: str, code: str, tenant_id: str = "default") -> None:
     from .config import cfg
     try:
-        d = cfg.VAULT / "14_Dashboards" / "_Diagrams"
+        d = (cfg.VAULT / "14_Dashboards" / "_Diagrams" if tenant_id == "default"
+             else cfg.VAULT / "_Tenants" / re.sub(r"[^\w\- ]", "_", tenant_id)[:128]
+             / "14_Dashboards" / "_Diagrams")
         d.mkdir(parents=True, exist_ok=True)
         safe = re.sub(r"[^\w\- ]", "_", topic)[:60] or "diagram"
         (d / f"{time.strftime('%Y%m%d-%H%M%S')}_{safe}.md").write_text(
@@ -212,7 +224,8 @@ async def route(text: str, user: dict, history_txt: str = "",
 
     if action == "chat":
         speech, result_sensitivity = await _chat(
-            text, history_txt, user["role"], user["sub"], sensitivity)
+            text, history_txt, user["role"], user["sub"], sensitivity,
+            user.get("tenant_id", "default"))
         return {"speech": speech, "action": "chat", "launched": False,
                 "sensitivity": result_sensitivity}
 
@@ -224,7 +237,7 @@ async def route(text: str, user: dict, history_txt: str = "",
     if action == "build":
         asyncio.create_task(orchestrator.run_directive(
             text, user_email=user["sub"], user_role=user["role"],
-            sensitivity=sensitivity))
+            sensitivity=sensitivity, tenant_id=user.get("tenant_id", "default")))
         return {"speech": ack or "Dispatching the team on that now, sir — I'll surface it on the dashboard.",
                 "action": "build", "launched": True, "sensitivity": sensitivity}
 
@@ -241,7 +254,7 @@ async def route(text: str, user: dict, history_txt: str = "",
         asyncio.create_task(orchestrator.run_directive(
             directive, user_email=user["sub"], user_role=user["role"],
             preferred_agents=[service["agent"]], sensitivity=sensitivity,
-            consulting=True))
+            consulting=True, tenant_id=user.get("tenant_id", "default")))
         return {"speech": ack or "I’m shaping a scoped SASTRAVA response using Listen, Shape, Deliver, sir.",
                 "action": "consulting", "launched": True, "service_line": service_id,
                 "sensitivity": sensitivity}
@@ -262,7 +275,8 @@ async def route(text: str, user: dict, history_txt: str = "",
             raise HTTPException(403, "lead generation is restricted to the business-development lane")
         from .crm.leadgen import generate_leads
         asyncio.create_task(generate_leads(icp=topic, location="", count=5, owner=user["sub"],
-                                           sensitivity=sensitivity))
+                                           sensitivity=sensitivity,
+                                           tenant_id=user.get("tenant_id", "default")))
         return {"speech": f"Sourcing prospects around {topic} now, sir — they'll land in the CRM.",
                 "action": "leadgen", "launched": True, "sensitivity": sensitivity}
 

@@ -51,11 +51,18 @@ class Orchestrator:
                             preferred_agents: list[str] | None = None,
                             all_agents: bool = False,
                             sensitivity: str = "internal",
-                            consulting: bool = False) -> dict:
+                            consulting: bool = False,
+                            tenant_id: str = "default") -> dict:
         trace = uuid.uuid4().hex[:8]
         t0 = time.time()
+        from .langgraph_conjunction import conjunction_engine
+        conjunction = await conjunction_engine.run(
+            directive=directive, actor_sub=user_email, actor_role=user_role,
+            tenant_id=tenant_id, allowed_lanes=_lanes_allowed(user_role),
+            sensitivity=sensitivity)
         session = sessions.start("swarm", directive, trace, requested_by=user_role,
-                                 owner=user_email, lane=role_of(user_role).lane)
+                                 owner=user_email, lane=role_of(user_role).lane,
+                                 tenant_id=tenant_id)
         allowed = _lanes_allowed(user_role)
         await bus.emit("system", "orchestrator",
                        f"directive received from {user_role}", trace=trace,
@@ -73,7 +80,7 @@ class Orchestrator:
 
         plan = await self._plan(directive, roster, trace, preferred_agents,
                                 user_id=user_email, user_role=user_role,
-                                sensitivity=sensitivity)
+                                sensitivity=sensitivity, tenant_id=tenant_id)
 
         # Validate the plan against the REAL roster — the planner (a small model)
         # sometimes invents keys. Keep only real ones; else fall back to a keyword
@@ -103,7 +110,8 @@ class Orchestrator:
             agent = registry.spawn(spec.key, trace=trace)
             agents_and_tasks.append((agent, item.get("task", directive)))
         results = await swarm.run(agents_and_tasks, trace=trace, user_id=user_email,
-                                  user_role=user_role, sensitivity=sensitivity)
+                                  user_role=user_role, sensitivity=sensitivity,
+                                  tenant_id=tenant_id)
 
         # 3. SYNTH — skip the extra LLM call when a single agent already answered
         if len(results) == 1 and not consulting:
@@ -111,15 +119,17 @@ class Orchestrator:
             await bus.emit("system", "orchestrator", "single agent — synthesis skipped", trace=trace)
         else:
             final = await self._synthesize(directive, results, trace, user_email, user_role,
-                                           sensitivity, consulting=consulting)
+                                           sensitivity, consulting=consulting,
+                                           tenant_id=tenant_id)
 
         # 4. PERSIST — off the event loop (sync file write + Obsidian REST push, F3)
         note_path = await asyncio.to_thread(write_deliverable, directive, final, user_role,
-                                            trace, [r.role for r in results])
+                                            trace, [r.role for r in results], tenant_id)
         await shared_memory.remember(text=final[:1500], kind="deliverable", role=user_role,
                                      actor="orchestrator", trace=trace, confidence=0.7,
                                  user_id=user_email, lane=role_of(user_role).lane,
                                  tainted=any(r.tainted for r in results),
+                                 tenant_id=tenant_id,
                                  sensitivity=max(
                                      [sensitivity, *(r.sensitivity for r in results)],
                                      key=("public", "internal", "confidential", "restricted").index))
@@ -142,6 +152,10 @@ class Orchestrator:
             "trace": trace,
             "directive": directive,
             "plan": plan,
+            "conjunction": {"backend": conjunction_engine.backend,
+                            "stage": conjunction["stage"],
+                            "selected_subgraphs": conjunction["selected_subgraphs"],
+                            "subgraph_outputs": conjunction["subgraph_outputs"]},
             "agents": [{"id": r.agent_id, "role": r.role, "elapsed": round(r.elapsed, 2),
                         "steps": r.steps, "output": r.output} for r in results],
             "deliverable": final,
@@ -153,7 +167,8 @@ class Orchestrator:
         return response
 
     async def run_single_agent(self, agent_key: str, task: str, *, user_role: str,
-                               user_id: str = "", sensitivity: str = "internal") -> dict:
+                               user_id: str = "", sensitivity: str = "internal",
+                               tenant_id: str = "default") -> dict:
         """Drive ONE agent directly (the 'use agents one by one' path). No planner/synth."""
         trace = uuid.uuid4().hex[:8]
         t0 = time.time()
@@ -165,12 +180,13 @@ class Orchestrator:
             raise PermissionError(f"role '{user_role}' may not run '{agent_key}'")
         session = sessions.start("single", f"[{spec.title}] {task}", trace,
                                  requested_by=user_role, owner=user_id,
-                                 lane=role_of(user_role).lane)
+                                 lane=role_of(user_role).lane, tenant_id=tenant_id)
         agent = registry.spawn(agent_key, trace=trace)
         result = await agent.run(task, user_id=user_id, user_role=user_role,
-                                 sensitivity=sensitivity)
+                                 sensitivity=sensitivity, tenant_id=tenant_id)
         note_path = await asyncio.to_thread(write_deliverable, f"[{spec.title}] {task}",
-                                            result.output, user_role, trace, [result.role])
+                                            result.output, user_role, trace, [result.role],
+                                            tenant_id)
         elapsed = time.time() - t0
         sessions.finish(session, agents=[result.role], elapsed=elapsed, preview=result.output)
         sensitivity_order = ("public", "internal", "confidential", "restricted")
@@ -184,7 +200,7 @@ class Orchestrator:
                 "vault_note": note_path}
 
     async def _plan(self, directive, roster, trace, preferred, *, user_id="", user_role="",
-                    sensitivity="internal"):
+                    sensitivity="internal", tenant_id="default"):
         if preferred:
             return {"agents": [{"key": k, "task": directive} for k in preferred],
                     "synthesis": "user-selected agents"}
@@ -196,7 +212,7 @@ class Orchestrator:
                   f"Pick the FEWEST agents (1-3) whose lanes actually match the directive. "
                   f'Return ONLY JSON: {{"agents":[{{"key":"<one of the keys>","task":"..."}}]}}')
         raw = await planner.run(prompt, user_id=user_id, user_role=user_role,
-                                sensitivity=sensitivity)
+                                sensitivity=sensitivity, tenant_id=tenant_id)
         return self._parse_json(raw.output) or {"agents": []}
 
     @staticmethod
@@ -228,7 +244,7 @@ class Orchestrator:
         return picked[:3]
 
     async def _synthesize(self, directive, results, trace, user_id="", user_role="",
-                          sensitivity="internal", consulting=False):
+                          sensitivity="internal", consulting=False, tenant_id="default"):
         synth = registry.spawn("synth", trace=trace)
         joined = "\n\n".join(f"## {r.role} ({r.agent_id})\n{r.output}" for r in results)
         output_format = (
@@ -244,7 +260,8 @@ class Orchestrator:
                         key=order.index)
         return (await synth.run(prompt, user_id=user_id, user_role=user_role,
                                 sensitivity=effective,
-                                inherited_taint=any(r.tainted for r in results))).output
+                                inherited_taint=any(r.tainted for r in results),
+                                tenant_id=tenant_id)).output
 
     @staticmethod
     def _parse_json(text: str):

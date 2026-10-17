@@ -19,6 +19,7 @@ from .config import cfg
 from .mcp import mcp
 from .rag.ingest import ingest_text
 from .orchestra.events import bus
+from .network_safety import validate_public_target_url
 
 _tasks: list[asyncio.Task] = []
 
@@ -31,7 +32,18 @@ async def crawl_loop():
                 res = await mcp.dispatch("web_search", {"query": q, "max_results": 6},
                                          lane="general", actor="crawler")
                 if res.ok and res.data:
-                    text = "\n".join(f"{r.get('title','')} — {r.get('url','')}" for r in res.data)
+                    safe_results = []
+                    for result in res.data:
+                        try:
+                            await asyncio.to_thread(
+                                validate_public_target_url, result.get("url", ""))
+                        except ValueError:
+                            continue
+                        safe_results.append(result)
+                    if not safe_results:
+                        continue
+                    text = "\n".join(
+                        f"{r.get('title', '')} — {r.get('url', '')}" for r in safe_results)
                     await ingest_text(text, title=f"crawl: {q[:40]}", role="general",
                                       injected_by="crawler", source="crawl")
                     await bus.emit("memory", "crawler", f"ingested {len(res.data)} results for '{q}'")

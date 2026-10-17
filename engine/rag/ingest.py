@@ -107,7 +107,8 @@ async def _store_chunks(chunks: List[str], meta: dict) -> dict:
 
 async def ingest_text(text: str, *, title: str, role: str, injected_by: str,
                       source: str = "prompt", lane: str | None = None,
-                      sensitivity: str | None = None) -> dict:
+                      sensitivity: str | None = None,
+                      tenant_id: str = "default") -> dict:
     """Ingest raw text / a pasted requirement / a prompt (human-typed)."""
     from ..auth.rbac import SENSITIVITY_LEVELS, role_of
     document_lane = lane or role
@@ -122,7 +123,7 @@ async def ingest_text(text: str, *, title: str, role: str, injected_by: str,
     chunks = await asyncio.to_thread(chunk_text, text)     # CPU chunking off the loop (F4)
     meta = {"title": title, "role": document_lane, "lane": document_lane,
             "sensitivity": sensitivity, "injected_by": injected_by,
-            "source": source, "ts": time.time()}
+            "source": source, "tenant_id": tenant_id, "ts": time.time()}
     if source not in {"crawl", "skill_harvest", "vault"}:
         meta["owner"] = injected_by
     result = await _store_chunks(chunks, meta)
@@ -131,20 +132,26 @@ async def ingest_text(text: str, *, title: str, role: str, injected_by: str,
 
 
 async def ingest_file(path: str | Path, *, role: str, injected_by: str,
-                      lane: str | None = None, sensitivity: str | None = None) -> dict:
+                      lane: str | None = None, sensitivity: str | None = None,
+                      tenant_id: str = "default") -> dict:
     """Ingest an uploaded pdf/docx/text/md file."""
     p = Path(path)
     text = await asyncio.to_thread(_read_any, p)   # sync pdf/docx/xlsx parse off the loop (F4)
     return await ingest_text(text, title=p.stem, role=role,
                              lane=lane, sensitivity=sensitivity,
-                             injected_by=injected_by, source=p.suffix.lstrip(".") or "file")
+                             injected_by=injected_by, source=p.suffix.lstrip(".") or "file",
+                             tenant_id=tenant_id)
 
 
 def _mirror_to_vault(title: str, text: str, meta: dict) -> None:
     """Write a note into 11_Knowledge_Base so Obsidian's graph shows the new input."""
     try:
         safe = re.sub(r"[^\w\- ]", "_", title)[:80] or "untitled"
-        folder = cfg.VAULT / "11_Knowledge_Base" / "_Injected"
+        folder = (cfg.VAULT / "11_Knowledge_Base" / "_Injected"
+                  if meta.get("tenant_id", "default") == "default"
+                  else cfg.VAULT / "_Tenants" / re.sub(
+                      r"[^\w\- ]", "_", str(meta["tenant_id"]))[:128]
+                  / "11_Knowledge_Base" / "_Injected")
         folder.mkdir(parents=True, exist_ok=True)
         note = folder / f"{safe}.md"
         front = ("---\n"
