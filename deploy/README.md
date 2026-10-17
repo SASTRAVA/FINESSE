@@ -44,6 +44,33 @@ origins served by the proxy. Keep all sales/provider live flags disabled until
 the corresponding provider, legal basis, consent process, and operational
 monitoring are reviewed.
 
+## Deploy to Vercel (Live Website Quickstart)
+
+The root `vercel.json` builds the React workspace and rewrites application
+requests to the FastAPI function at `api/index.py`.
+
+1. Import `SASTRAVA/FINESSE` in Vercel with Root Directory `.` and FastAPI/Python
+   detection (or Other). Keep the Vercel build command and output directory
+   controlled by the checked-in `vercel.json`.
+2. In Vercel Project Settings → Environment Variables, set `CEO_EMAIL`,
+   `CEO_PASSWORD` (12–72 bytes), `JWT_SECRET` (at least 32 random bytes), and
+   an independent `KMS_MASTER_KEY` (at least 32 random bytes). Apply them to
+   both Preview and Production, then redeploy.
+3. Optionally configure `NVIDIA_API_KEY` / `GROQ_API_KEY` for hosted inference,
+   `DATABASE_URL` for managed PostgreSQL, `QDRANT_URL` for managed Qdrant, and
+   `REDIS_URL` for shared login throttling. Vercel preview and production
+   hostnames are automatically included in CORS. Test `/api/health`,
+   `/api/v1/platform/runtime`, `/workspace/`, `/dashboard`, `/command`, and
+   `/jarvis`. For local testing, install Vercel CLI 48.1.8 or newer and run
+   `vercel dev` from the repository root.
+
+Vercel function instances are ephemeral: local `/tmp` databases, Qdrant,
+vaults, uploads, and JSON-backed accounts are not durable or shared between
+instances. Managed PostgreSQL persists platform records and managed Qdrant
+persists vectors, but the legacy account JSON store and vault files remain
+instance-local. Treat Vercel hosting as a live test/demo deployment unless
+those remaining persistence paths are migrated to shared services.
+
 ## Deploy and verify
 
 From the repository root:

@@ -22,6 +22,7 @@ import uuid
 import time
 import ipaddress
 import re
+import logging
 from pathlib import Path
 from typing import Annotated
 
@@ -32,7 +33,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field
 
-from .config import cfg, validate_runtime_security
+from .config import cfg, validate_runtime_security, vercel_missing_environment
 from .auth import users, make_token, decode_token, role_of, can, ROLES
 from .auth.security import LoginThrottle
 from .rag import store, ingest_text, ingest_file
@@ -62,6 +63,8 @@ _WEB = Path(__file__).parent / "web"
 _LOGIN_LIMIT = 5
 _LOGIN_WINDOW_S = 900
 login_throttle = LoginThrottle(limit=_LOGIN_LIMIT, window_s=_LOGIN_WINDOW_S)
+_logger = logging.getLogger("finesse.startup")
+_vercel_catalog_counts = {"services": 0, "playbooks": 0, "repositories": 0}
 
 
 @app.exception_handler(DataEgressBlocked)
@@ -86,6 +89,17 @@ async def security_and_login_rate_limit(request, call_next):
             login_throttle.succeeded(ip=client_ip)
     response.headers.update(_security_headers(request))
     return response
+
+
+@app.middleware("http")
+async def vercel_function_path_compat(request: Request, call_next):
+    prefix = "/api/index.py"
+    path = request.scope["path"]
+    if cfg.IS_VERCEL and (path == prefix or path.startswith(prefix + "/")):
+        normalized = path[len(prefix):] or "/"
+        request.scope["path"] = normalized
+        request.scope["raw_path"] = normalized.encode("utf-8")
+    return await call_next(request)
 
 
 def _remote_ip(request: Request) -> str:
@@ -263,8 +277,24 @@ class LearningPlanIn(BaseModel):
 # ---------- lifecycle ----------
 @app.on_event("startup")
 async def _startup():
+    if cfg.IS_VERCEL and vercel_missing_environment():
+        _logger.error(
+            "Vercel setup is incomplete. Add CEO_EMAIL, CEO_PASSWORD, JWT_SECRET, and "
+            "KMS_MASTER_KEY under Project Settings > Environment Variables, assign "
+            "Preview and Production scopes, then redeploy. /api/health reports missing "
+            "authentication settings.")
+        return
     validate_runtime_security()
     await store.init()
+    if cfg.IS_VERCEL:
+        try:
+            await _seed_vercel_catalog()
+        except Exception:
+            _logger.exception("Vercel public catalog seeding failed")
+        await bus.emit("system", "core", "FINESSE online",
+                       backend=llm.backend_name(), store=store.backend_name(),
+                       embed=embedder.backend, bg_tasks=0)
+        return
     # ensure every engine agent exists as an Obsidian note on boot
     try:
         n = registry.load_persisted()   # restore agents JARVIS/Hermes created in prior sessions
@@ -288,9 +318,32 @@ async def _startup():
                    store=store.backend_name(), embed=embedder.backend, bg_tasks=n)
 
 
+async def _seed_vercel_catalog() -> None:
+    from .knowledge.indexing import index_public_catalog
+    from .knowledge.universal_catalog import REPOSITORY_SEEDS
+
+    catalog = catalog_response()
+    for service in catalog["services"]:
+        storage.put_if_absent("services", "default", service["id"], service)
+    for repository in REPOSITORY_SEEDS:
+        storage.put_if_absent(
+            "catalog_repositories", "default", repository["full_name"], repository)
+    await index_public_catalog(store)
+    _vercel_catalog_counts.update({
+        "services": len(catalog["services"]),
+        "playbooks": sum(bool(playbook["content"].strip())
+                         for playbook in catalog["playbooks"]),
+        "repositories": len(REPOSITORY_SEEDS) + len(catalog["public_repositories"]),
+    })
+    _logger.info("Vercel public catalog seeded: %d services, %d playbooks, %d repositories",
+                 _vercel_catalog_counts["services"], _vercel_catalog_counts["playbooks"],
+                 _vercel_catalog_counts["repositories"])
+
+
 @app.on_event("shutdown")
 async def _shutdown():
-    crawler.stop_background()
+    if not cfg.IS_VERCEL:
+        crawler.stop_background()
 
 
 # ---------- auth ----------
@@ -985,6 +1038,7 @@ async def landing():
     return HTMLResponse("<h1>SASTRAVA FINESSE</h1><p>jarvis.html missing</p>")
 
 
+@app.get("/dashboard", response_class=HTMLResponse)
 @app.get("/universe", response_class=HTMLResponse)
 async def universe():
     """The 3D neon universe graph dashboard (opened from JARVIS)."""
@@ -1098,6 +1152,30 @@ async def keys_route(user: dict = Depends(require("read:all"))):
 @app.get("/health")
 async def health():
     return JSONResponse({"status": "online"})
+
+
+@app.get("/api/health")
+async def api_health():
+    missing = vercel_missing_environment() if cfg.IS_VERCEL else []
+    if missing:
+        return JSONResponse(
+            {"ok": False, "vercel_setup_required": True, "missing_env": missing},
+            status_code=503)
+    return JSONResponse({"ok": True, "vercel_setup_required": False, "missing_env": []})
+
+
+@app.get("/api/v1/platform/runtime")
+async def platform_runtime():
+    missing = vercel_missing_environment() if cfg.IS_VERCEL else []
+    return {
+        "environment": cfg.ENV,
+        "is_vercel": cfg.IS_VERCEL,
+        "sales_dry_run": cfg.SALES_DRY_RUN,
+        "seeded_services_count": _vercel_catalog_counts["services"],
+        "seeded_playbooks_count": _vercel_catalog_counts["playbooks"],
+        "catalog_repos_count": _vercel_catalog_counts["repositories"],
+        "setup_ready": not missing,
+    }
 
 
 # the galaxy's backend, powered entirely by FINESSE agents

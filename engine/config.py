@@ -6,12 +6,16 @@ from __future__ import annotations
 import os
 import logging
 import ipaddress
+import re
+from collections.abc import Mapping
 from pathlib import Path
 from functools import lru_cache
 from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parent.parent          # .../FINESSE
-load_dotenv(ROOT / ".env")
+_IS_VERCEL = bool(os.getenv("VERCEL") or os.getenv("VERCEL_ENV"))
+if not _IS_VERCEL:
+    load_dotenv(ROOT / ".env")
 
 
 def _b(name: str, default: str = "") -> str:
@@ -46,18 +50,48 @@ def _rooted_path(name: str, default: str) -> Path:
     return (value if value.is_absolute() else ROOT / value).resolve()
 
 
+def _storage_paths(environ: Mapping[str, str] = os.environ) -> tuple[Path, Path]:
+    is_vercel = bool(environ.get("VERCEL") or environ.get("VERCEL_ENV"))
+    data_value = environ.get("FINESSE_DATA_DIR", "").strip()
+    vault_value = environ.get("VAULT_PATH", "").strip()
+    data = (Path(data_value) if data_value else
+            Path("/tmp/finesse-data") if is_vercel else ROOT / "data")
+    vault = (Path(vault_value) if vault_value else
+             Path("/tmp/finesse-vault") if is_vercel else ROOT / "vault")
+    if not data.is_absolute():
+        data = ROOT / data
+    if not vault.is_absolute():
+        vault = ROOT / vault
+    return data.resolve(), vault.resolve()
+
+
+def _cors_origins(environ: Mapping[str, str] = os.environ) -> tuple[str, ...]:
+    raw_origins = environ.get("CORS_ORIGINS", _DEV_ORIGINS)
+    origins = [value.strip() for value in raw_origins.split(",") if value.strip()]
+    if "*" in origins:
+        raise ValueError("CORS_ORIGINS must not contain a wildcard origin")
+    for variable in ("VERCEL_URL", "VERCEL_PROJECT_PRODUCTION_URL"):
+        host = environ.get(variable, "").strip().rstrip("/")
+        if host and re.fullmatch(r"[A-Za-z0-9.-]+(?::[0-9]{1,5})?", host):
+            origin = f"https://{host}"
+            if origin not in origins:
+                origins.append(origin)
+    return tuple(origins)
+
+
 _DEV_ORIGINS = "http://localhost:8000,http://127.0.0.1:8000"
 
 
 class Config:
     # --- paths ---
     ROOT = ROOT
+    IS_VERCEL = _IS_VERCEL
     ENV = _b("FINESSE_ENV", _b("ENV", "development")).lower()
     HOST = _b("HOST", _b("APP_HOST", "127.0.0.1"))
     PORT = _i("PORT", _i("APP_PORT", 8600))
     APP_HOST = HOST
     APP_PORT = PORT
-    CORS_ORIGINS = _csv("CORS_ORIGINS", _DEV_ORIGINS)
+    CORS_ORIGINS = _cors_origins()
     REDACT_PII_ON_EXTERNAL_LLM = _b("REDACT_PII_ON_EXTERNAL_LLM", "true").lower() in (
         "1", "true", "yes")
     ALLOW_CONFIDENTIAL_EXTERNAL_EGRESS = _b(
@@ -96,8 +130,9 @@ class Config:
     CALENDAR_SYNC_ENABLED = _b("CALENDAR_SYNC_ENABLED", "false").lower() in ("1", "true", "yes")
     CALENDAR_WEBHOOK_URL = _b("CALENDAR_WEBHOOK_URL")
     CALENDAR_API_TOKEN = _b("CALENDAR_API_TOKEN")
-    VAULT = (ROOT / _b("VAULT_PATH", "./vault")).resolve()
-    DATA = _rooted_path("FINESSE_DATA_DIR", "./data")
+    DATA, VAULT = _storage_paths()
+    DATA_DIR = DATA
+    VAULT_PATH = VAULT
     UPLOADS = DATA / "uploads"
 
     # --- inference (NIM now, local later) ---
@@ -137,7 +172,7 @@ class Config:
     # --- vector db ---
     QDRANT_MODE = _b("QDRANT_MODE", "embedded")               # embedded | server
     # resolve to absolute under ROOT so the brain is found regardless of CWD
-    QDRANT_PATH = str(_rooted_path("QDRANT_PATH", str(DATA / "qdrant")))
+    QDRANT_PATH = str(_rooted_path("QDRANT_PATH", str(DATA_DIR / "qdrant")))
     QDRANT_URL = _b("QDRANT_URL")
     QDRANT_COLLECTION = _b("QDRANT_COLLECTION", "sastrava_brain")
 
@@ -211,7 +246,10 @@ class Config:
     REQUEST_TIMEOUT_S = _i("REQUEST_TIMEOUT_S", 90)
 
     def ensure_dirs(self) -> None:
-        for p in (self.DATA, self.UPLOADS, self.DATA / "qdrant"):
+        paths = (self.DATA, self.UPLOADS, self.DATA / "qdrant")
+        if self.IS_VERCEL:
+            paths += (self.VAULT,)
+        for p in paths:
             p.mkdir(parents=True, exist_ok=True)
 
     @property
@@ -262,6 +300,34 @@ def validate_runtime_security(config=None) -> None:
     if environment == "production":
         raise RuntimeError(message)
     logging.getLogger("finesse.security").critical("%s — development mode is unsafe", message)
+
+
+def vercel_missing_environment(config=None) -> list[str]:
+    """Return required Vercel bootstrap settings that are absent or unsafe."""
+    config = config or cfg
+    placeholders = {"dev-insecure-change-me", "changeme", "0000", "finesse-ceo-2026"}
+
+    def unsafe(value: str) -> bool:
+        lowered = value.casefold()
+        return (lowered in placeholders or lowered.startswith("<")
+                or any(marker in lowered
+                       for marker in ("paste_", "generate_", "set_a_strong_")))
+
+    missing = []
+    jwt_secret = str(getattr(config, "JWT_SECRET", "") or "").strip()
+    if len(jwt_secret.encode("utf-8")) < 32 or unsafe(jwt_secret):
+        missing.append("JWT_SECRET")
+    password = str(getattr(config, "CEO_PASSWORD", "") or "").strip()
+    if (len(password) < 12 or len(password.encode("utf-8")) > 72
+            or unsafe(password)):
+        missing.append("CEO_PASSWORD")
+    email = os.environ.get("CEO_EMAIL", "").strip()
+    if not email:
+        missing.append("CEO_EMAIL")
+    master_key = str(getattr(config, "KMS_MASTER_KEY", "") or "").strip()
+    if len(master_key.encode("utf-8")) < 32 or unsafe(master_key):
+        missing.append("KMS_MASTER_KEY")
+    return missing
 
 
 def validate_startup_config(config=None) -> None:

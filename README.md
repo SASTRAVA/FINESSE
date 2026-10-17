@@ -230,6 +230,47 @@ npm run build
 The built workspace is served by FastAPI and the standalone HTML dashboards
 link to it. Its typed React/Vite source lives in `frontend/`.
 
+## Deploy to Vercel (Live Website Quickstart)
+
+Vercel serves the Python FastAPI app through `api/index.py` and builds the
+React/TypeScript workspace from `frontend/`. The root [vercel.json](vercel.json)
+contains the build command, routing rewrites, and baseline security headers.
+
+1. Import `SASTRAVA/FINESSE` into Vercel and keep the project Root Directory at
+   `.`. Use FastAPI/Python framework detection (or Other); do not configure a
+   second build or output directory in the dashboard because `vercel.json`
+   provides both. Vercel CLI 48.1.8 or newer is required for local `vercel dev`.
+2. Add these Environment Variables to **Preview** and **Production** (and
+   Development if you use Vercel CLI):
+   - `CEO_EMAIL` — the initial administrator account.
+   - `CEO_PASSWORD` — unique password, at least 12 characters and no more than
+     bcrypt's 72-byte limit.
+   - `JWT_SECRET` — independently generated random value of at least 32 bytes.
+   - `KMS_MASTER_KEY` — separate random value of at least 32 bytes for
+     encrypting provider credentials.
+3. Optionally configure `NVIDIA_API_KEY`, `GROQ_API_KEY`, `DATABASE_URL` (a
+   managed PostgreSQL URL), `QDRANT_URL` (a managed Qdrant URL), and
+   `REDIS_URL`. Vercel-provided `VERCEL_URL` and
+   `VERCEL_PROJECT_PRODUCTION_URL` are automatically added to the CORS
+   allowlist. Add a custom frontend origin to `CORS_ORIGINS` if it is not
+   represented by those Vercel hostnames.
+
+For local serverless-style testing, install the Vercel CLI and run
+`vercel dev` from the repository root after configuring Development variables.
+Test `/api/health`, `/api/v1/platform/runtime`, `/workspace/`, `/dashboard`,
+`/command`, and `/jarvis`.
+
+Vercel's `/tmp` storage is writable but ephemeral and isolated per function
+instance. FINESSE automatically puts local data, vault, and Qdrant files there
+when their paths are not overridden. Cold starts bootstrap the CEO and public
+catalog from configured environment values. For shared durable platform
+records, configure managed PostgreSQL; for shared durable vectors, configure
+managed Qdrant. The legacy account JSON store and vault files remain
+instance-local/ephemeral, so do not rely on Vercel filesystem state for durable
+user provisioning, password changes, uploads, or generated vault documents.
+The runtime status badge reports whether required setup is present and whether
+sales providers remain in dry-run mode.
+
 Local vault content, uploads, user records,
 vector data, audit logs, and credentials are intentionally excluded from this
 public source repository. Point `VAULT_PATH` at a vault you control; do not

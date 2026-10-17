@@ -4,6 +4,12 @@ type Tab = "command" | "sales" | "memory" | "security" | "calendar";
 type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 type RecordData = Record<string, JsonValue>;
 type JsonObject = { [key: string]: JsonValue };
+type RuntimeInfo = {
+  environment: string;
+  is_vercel: boolean;
+  sales_dry_run: boolean;
+  setup_ready: boolean;
+};
 
 function parseJsonObject(source: string): JsonObject {
   const value: unknown = JSON.parse(source);
@@ -30,6 +36,19 @@ export function Workspace() {
   const [notice, setNotice] = useState("");
   const [data, setData] = useState<RecordData>({});
   const [busy, setBusy] = useState(false);
+  const [runtime, setRuntime] = useState<RuntimeInfo | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    fetch("/api/v1/platform/runtime")
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`Runtime status unavailable (${response.status})`);
+        return await response.json() as RuntimeInfo;
+      })
+      .then((value) => { if (active) setRuntime(value); })
+      .catch(() => { if (active) setRuntime(null); });
+    return () => { active = false; };
+  }, []);
 
   const request = useCallback(async (path: string, init: RequestInit = {}) => {
     const headers = new Headers(init.headers);
@@ -127,6 +146,7 @@ export function Workspace() {
         <span className="eyebrow">SASTRAVA · FINESSE</span>
         <h1>Operator workspace</h1>
         <p>Sign in with your FINESSE account. The session token stays in this browser tab.</p>
+        <span className="status-badge" role="status">{runtimeLabel(runtime)}</span>
         <label htmlFor="email">Email</label>
         <input id="email" autoComplete="username" type="email" value={email} onChange={(event) => setEmail(event.target.value)} required />
         <label htmlFor="password">Password</label>
@@ -140,7 +160,7 @@ export function Workspace() {
   return <main className="app-shell">
     <header className="topbar">
       <a className="wordmark" href="/workspace/">FINESSE</a>
-      <span className="status-badge">Tenant-aware · review first</span>
+      <span className="status-badge" role="status">{runtimeLabel(runtime)}</span>
       <button className="quiet" onClick={logout}>Sign out</button>
     </header>
     <div className="layout">
@@ -166,6 +186,13 @@ export function Workspace() {
       </section>
     </div>
   </main>;
+}
+
+function runtimeLabel(runtime: RuntimeInfo | null): string {
+  if (!runtime) return "Environment status unavailable";
+  const environment = runtime.is_vercel ? "Vercel" : runtime.environment;
+  return `${environment} · ${runtime.setup_ready ? "ready" : "setup required"} · ${
+    runtime.sales_dry_run ? "dry-run" : "live providers enabled"}`;
 }
 
 function Status({ error, notice }: { error: string; notice: string }) {

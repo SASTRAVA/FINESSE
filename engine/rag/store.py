@@ -73,7 +73,7 @@ class VectorStore:
         try:
             from qdrant_client import AsyncQdrantClient
             from qdrant_client.models import Distance, VectorParams
-            if cfg.QDRANT_MODE == "server" and cfg.QDRANT_URL:
+            if cfg.QDRANT_URL:
                 self._client = AsyncQdrantClient(url=cfg.QDRANT_URL)
             else:
                 self._client = AsyncQdrantClient(path=cfg.QDRANT_PATH)

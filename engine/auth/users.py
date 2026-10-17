@@ -7,13 +7,14 @@ so you can "map by employee data usage" as requested.
 """
 from __future__ import annotations
 import json
+import logging
 import re
 import time
 from dataclasses import dataclass, asdict, field
 from pathlib import Path
 from typing import Optional
 
-from ..config import cfg
+from ..config import cfg, vercel_missing_environment
 from .rbac import role_of
 from .security import hash_pw, verify_pw
 
@@ -67,6 +68,13 @@ class UserStore:
                                   indent=2), encoding="utf-8")
 
     def _bootstrap_ceo(self):
+        if cfg.IS_VERCEL and vercel_missing_environment():
+            logging.getLogger("finesse.startup").error(
+                "Vercel setup is incomplete. Set CEO_EMAIL, CEO_PASSWORD "
+                "(12+ characters), JWT_SECRET, and KMS_MASTER_KEY (each secret 32+ "
+                "characters where applicable) in the "
+                "Vercel Project Settings > Environment Variables, then redeploy.")
+            return
         if len(cfg.JWT_SECRET) < 32:
             raise RuntimeError("Set JWT_SECRET to a random secret of at least 32 characters.")
         validate_password_strength(cfg.CEO_PASSWORD)

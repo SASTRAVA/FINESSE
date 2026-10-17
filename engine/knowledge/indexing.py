@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import uuid
+
 from .sastrava import catalog_response
 
 
@@ -26,7 +28,7 @@ async def index_public_catalog(vector_store) -> int:
         if summary:
             documents.append((repo["name"], summary, "sastrava_github"))
 
-    texts, payloads = [], []
+    texts, payloads, ids = [], [], []
     for title, content, source in documents:
         for index, chunk in enumerate(chunk_text(content)):
             texts.append(chunk)
@@ -34,7 +36,10 @@ async def index_public_catalog(vector_store) -> int:
                 "title": title, "lane": "general", "role": "general",
                 "sensitivity": "public", "source": source, "chunk": index,
             })
+            ids.append(str(uuid.uuid5(
+                uuid.NAMESPACE_URL,
+                f"finesse-public-catalog:{source}:{title}:{index}:{chunk}")))
     if not texts:
         return 0
-    await vector_store.upsert(texts, payloads)
+    await vector_store.upsert(texts, payloads, ids=ids)
     return len(texts)

@@ -1,0 +1,35 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "cd frontend && npm ci && npm run build",
+  "outputDirectory": "engine/web/react-ui",
+  "functions": {
+    "api/index.py": {
+      "includeFiles": "engine/**"
+    }
+  },
+  "rewrites": [
+    { "source": "/api/:path*", "destination": "/api/index.py" },
+    { "source": "/hubapi/:path*", "destination": "/api/index.py" },
+    { "source": "/dashboard", "destination": "/api/index.py" },
+    { "source": "/universe", "destination": "/api/index.py" },
+    { "source": "/command", "destination": "/api/index.py" },
+    { "source": "/jarvis", "destination": "/api/index.py" },
+    { "source": "/voice", "destination": "/api/index.py" },
+    { "source": "/workspace/:path*", "destination": "/api/index.py" },
+    { "source": "/workspace", "destination": "/api/index.py" },
+    { "source": "/innovation", "destination": "/api/index.py" },
+    { "source": "/hub/:path*", "destination": "/api/index.py" },
+    { "source": "/hub", "destination": "/api/index.py" },
+    { "source": "/", "destination": "/api/index.py" }
+  ],
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        { "key": "X-Content-Type-Options", "value": "nosniff" },
+        { "key": "X-Frame-Options", "value": "DENY" },
+        { "key": "Referrer-Policy", "value": "no-referrer" }
+      ]
+    }
+  ]
+}

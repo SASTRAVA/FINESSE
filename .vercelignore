@@ -1,0 +1,18 @@
+.env
+.env.*
+!.env.example
+.venv/
+venv/
+data/
+vault/
+FINESSE VAULT/
+training/
+tests/
+frontend/node_modules/
+.git/
+__pycache__/
+*.pyc
+voice/friday.json
+.mcp.json
+HANDOFF.md
+ARCHITECTURE.md
