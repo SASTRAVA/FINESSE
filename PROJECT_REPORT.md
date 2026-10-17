@@ -144,10 +144,12 @@ does not automatically deploy a trained adapter. Training examples are
 excluded from the public repository.
 
 `engine/db/storage.py` persists tenant-keyed JSON records in SQLite. The
-PostgreSQL RLS migration is a template only and is not connected to the
-application. Legacy JSON stores and process-local event/approval/session state
-remain, so multi-process consistency and full tenant lifecycle management have
-not been established.
+`engine/db/storage.py` can use SQLite locally or PostgreSQL when
+`DATABASE_URL` is configured. PostgreSQL transactions set the verified tenant
+with a transaction-local setting and enforce RLS; the migration companion
+documents equivalent policies. Legacy JSON stores and some process-local
+event/session state remain, so full tenant lifecycle and multi-process
+consistency are not established.
 
 ### 6. Voice and external data flow
 
@@ -187,8 +189,10 @@ data must not be written into the public catalog.
 Safe-foundation sales flows generate deterministic synthetic leads by default
 (`SALES_DRY_RUN=true`). The older lead-generation route now follows that switch;
 it does not contact prospects or generate outreach drafts while dry-run is
-enabled. Email and voice routes prepare drafts/previews only, and security
-scan plans remain non-executing. Catalog seed repositories remain discovered
+enabled. Email/voice provider adapters, domain-only enrichment, and external
+calendar sync are available only behind independent opt-in flags, consent and
+authorization gates; all default to dry-run/local operation. Security scan
+plans remain non-executing. Catalog seed repositories remain discovered
 examples until a source-evidence certification process approves them.
 
 ## Findings and required changes
@@ -207,8 +211,8 @@ examples until a source-evidence certification process approves them.
 | H-5 | **HIGH** | **Remediated (source-level guardrails)** | A non-loopback production bind could expose the service without TLS proxy controls. | `engine/config.py` rejects non-loopback production `HOST` unless `TRUSTED_PROXY_IPS` is configured or `ALLOW_UNENCRYPTED_PUBLIC_BIND=true` is explicitly set. `engine/main.py` trusts forwarded headers only from allowlisted proxies and adds HSTS for verified HTTPS. FINESSE does not terminate TLS itself; deploy a correctly configured TLS proxy and firewall. |
 | H-6 | **HIGH** | Partially mitigated | The optional FRIDAY client must authenticate to FINESSE. Credentials can still be stored in its local JSON configuration as plaintext, even though the repository no longer contains credential defaults. | Prefer process environment variables or Windows Credential Manager, use a dedicated least-privilege account, and restrict the local config file's filesystem permissions. |
 | H-7 | **HIGH** | **Remediated (source-level controls)** | Authentication previously used process-local IP-only throttling and did not enforce a strong password lifecycle. | `engine/auth/security.py` and `engine/main.py` track failed attempts by IP and normalized account; trusted proxy rules prevent spoofed forwarded IPs. `engine/auth/users.py` enforces 12-character minimums, rejects known placeholders, and supports authenticated password rotation with a content-free audit event at `/api/auth/change-password`. Limits remain process-local; distributed throttling and account recovery remain deployment/future work. |
-| M-10 | **MEDIUM** | Partially mitigated | Tenant-aware foundations do not yet make every legacy store or operator workflow independently deployable per tenant. Existing local records default to the `default` tenant; JSON-backed account/CRM stores and process-local event state remain, and the PostgreSQL RLS migration is not wired to runtime persistence. | JWT tenant claims, tenant-filtered RAG/memory/CRM/session/Hub paths, tenant-keyed SQLite records, and tenant-specific deliverable paths are implemented. Complete data migration, organization lifecycle administration, multi-worker consistency, and tenant-isolation integration tests before treating FINESSE as a SaaS platform. |
-| M-1 | **MEDIUM** | Partially mitigated | The JSON user/CRM stores and in-memory event/session state are not transactional or multi-process safe. Session listings are now identity-scoped for non-executives, but state remains volatile and process-local. | Move shared records and sessions to a transactional database, define backup/restore and retention, and test multiple workers before scaling out. |
+| M-10 | **MEDIUM** | Partially mitigated | Tenant-aware foundations do not yet make every legacy store or operator workflow independently deployable per tenant. Existing local records default to the `default` tenant; JSON-backed account/CRM stores and some process-local event state remain. | `engine/db/storage.py` now selects SQLite or PostgreSQL from `DATABASE_URL`; PostgreSQL operations set transaction-local `app.current_tenant_id` and enforce RLS on tenant tables. JWT tenant claims, tenant-filtered RAG/memory/CRM/session/Hub paths, and tenant-specific deliverables are implemented. Existing records are not automatically migrated; test a dedicated non-superuser database role, backup/restore, tenant lifecycle, and multi-worker behavior before treating FINESSE as SaaS. |
+| M-1 | **MEDIUM** | Partially mitigated | Some account/CRM stores and process-local event/session state are not transactional or multi-process safe. | Platform records use tenant-keyed SQLite or PostgreSQL/RLS; `REDIS_URL` provides shared login throttling. Legacy stores and event/session components remain, so migrate those systems and test multiple workers before scaling out. |
 | M-2 | **MEDIUM** | Open | Runtime error handling in some Hub persistence/dispatch paths suppresses exceptions and can return an idea result even when indexing or dispatch failed. | Return partial-failure status explicitly, log structured diagnostics without sensitive content, and make background task failures observable. |
 | M-3 | **MEDIUM** | Open | There is no comprehensive app test suite or model-quality evaluation. The new tests cover important authorization, upload, and retrieval guards, not end-to-end model correctness or concurrency. | Add CI, API/integration tests, role-isolation tests, model-output evaluations, and a reproducible load test. |
 | M-4 | **MEDIUM** | Open | Prompt outputs are not schema-validated beyond selected JSON parsing. Factuality, relevance, and lead quality are not measured automatically. | Define structured output schemas, source attribution, quality thresholds, and human review for business-critical conclusions. |
@@ -217,6 +221,8 @@ examples until a source-evidence certification process approves them.
 | M-7 | **MEDIUM** | Open | A compressed Office document can expand substantially during parsing even when its uploaded size is within the 10 MiB limit. PDF page counts and spreadsheet rows are not separately bounded. | Parse untrusted documents in a resource-limited worker; enforce page/row/expanded-size limits and reject malformed or unusually large archives. |
 | M-8 | **MEDIUM** | **Remediated** | Hosted embedding and TTS clients were outside credential/PII scrubbing and confidential-data egress controls. | `engine/llm/provider.py` exposes shared scrubbing and egress-policy helpers. `engine/rag/embeddings.py` scrubs hosted requests and routes confidential/restricted embedding to deterministic offline hash generation, avoiding hosted requests and model downloads; `engine/rag/store.py` passes chunk sensitivity into embedding calls and conservatively treats search queries as confidential. `engine/main.py` carries sensitivity resolved by JARVIS/RAG into dashboard TTS requests; `engine/voice_tts.py` scrubs external speech text, defaults omitted classifications to confidential, and blocks confidential/restricted cloud speech unless the explicit egress override is set. |
 | M-9 | **MEDIUM** | **Partially mitigated** | Public company and portfolio information can become stale or be misinterpreted when used as consulting context. | The constrained sync scripts save sanitized website and public-repository summaries under `engine/knowledge/`; the indexer labels them public/general and retrieval treats external chunks as untrusted. Add a periodic owner review, freshness tracking, and source-level approval before treating catalog text as policy or client-specific evidence. |
+| H-8 | **HIGH** | **Remediated (opt-in source controls)** | Email, voice, enrichment, and calendar provider effects lacked consistent consent, replay, egress, and credential-at-rest gates. | `engine/sales/providers.py` provides dry-run-by-default SMTP/HTTPS email, Twilio, domain-only enrichment, and local ICS/optional HTTPS calendar adapters. API routes check user roles, contact consent/suppression, campaign approval, an action-bound single-use voice approval, provider webhook signatures, idempotency, and the emergency stop. Twilio form callbacks validate `X-Twilio-Signature` using the configured callback URL and tenant auth token; a signed, tenant/contact-bound speech/DTMF Gather callback records opt-outs as suppression entries without persisting transcripts. `engine/db/tenant_secrets.py` encrypts tenant provider credentials with AES-GCM and a separately configured KMS master key. Compose keeps live effects disabled. No external provider or live calling was tested; operators must verify their consent/legal requirements and provider configuration. |
+| M-11 | **MEDIUM** | **Remediated (source-level controls)** | Provider credentials could not be safely managed as tenant-scoped encrypted values, and operations lacked a rootless deployment/runbook. | CEO/COO-only provider-secret routes store ciphertext envelopes and audit metadata without returning plaintext; `deploy/compose.yaml` uses non-root API/worker services, loopback publishing, read-only filesystems, dropped capabilities, and no-new-privileges. The deployment runbook documents TLS proxy, secrets, upgrades, and recovery. Secure KMS key management and an actual deployment validation remain operator responsibilities. |
 | L-1 | **LOW** | Open | `TurboQuant` is the name of a concurrency/cache layer here; it does not quantize the completion model. The performance language can be mistaken for a measured quantization or throughput result. | Describe it as bounded serving/caching, report actual backend quantization separately, and publish benchmarks before making capacity claims. |
 | L-2 | **LOW** | Open | No project license is present. A public repository without a license does not grant general reuse rights. | Select and add a license only after the owner decides the intended reuse terms. |
 | L-3 | **LOW** | Open | WebSocket authentication uses a query parameter because browser WebSocket APIs cannot set a normal Authorization header. Reverse proxies may log URLs. | Ensure query strings are redacted from logs; consider a short-lived, single-use WebSocket ticket or a secure cookie once HTTPS is deployed. |
@@ -246,10 +252,20 @@ examples until a source-evidence certification process approves them.
 - Extended tenant claims through orchestration, RAG, memory, tool dispatch,
   sessions, Hub queues, and CRM; scoped generated deliverables and innovation
   notes, while denying global vault/operator views to non-default tenants.
-- Added SQLite tenant-keyed record storage and a PostgreSQL RLS template. The
-  template is not an active PostgreSQL backend.
+- Added SQLite tenant-keyed record storage and an optional PostgreSQL JSONB
+  backend that binds every transaction to the authenticated tenant and applies
+  RLS. Legacy stores still need migration for complete tenant consistency.
 - Added deterministic review-only conjunction plans and sandbox-first synthetic
-  lead generation. No live mail, calls, or security scans are enabled.
+  lead generation. Live mail/calls are opt-in and require consent/approval;
+  security plans remain non-executing.
+- Added provider adapters for idempotent SMTP/HTTPS email, explicitly
+  authorized Twilio voice, consent-gated company-domain enrichment, signed
+  provider webhooks, and local ICS with optional external calendar sync.
+- Added AES-GCM tenant provider-secret storage, optional shared Redis login
+  throttling, a rootless Compose deployment, and deployment/backup runbooks.
+- Added a typed React/Vite operator workspace, built assets served at
+  `/workspace/`, and links from both standalone dashboards. The frontend build
+  is required after changing its source, but not to run the API.
 - Fixed a sliding-window throttling bug where pre-limit checks erased failed
   attempt counters before they could lock an account or IP.
 - Added `FINESSE_ENV`, fail-fast production secret validation, loopback

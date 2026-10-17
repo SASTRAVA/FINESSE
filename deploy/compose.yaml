@@ -1,0 +1,115 @@
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    env_file:
+      - ../.env
+    environment:
+      FINESSE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 8600
+      SALES_DRY_RUN: "true"
+      SALES_LIVE_OUTREACH_ENABLED: "false"
+      EMAIL_LIVE_ENABLED: "false"
+      VOICE_LIVE_ENABLED: "false"
+      DATABASE_URL: postgresql://finesse:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/finesse
+      REDIS_URL: redis://redis:6379/0
+      TRUSTED_PROXY_IPS: ${TRUSTED_PROXY_IPS:-}
+    ports:
+      - "127.0.0.1:8600:8600"
+    volumes:
+      - finesse-data:/app/data
+      - finesse-vault:/app/vault
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    user: "${FINESSE_UID:-10001}:${FINESSE_GID:-10001}"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+  security-worker:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    env_file:
+      - ../.env
+    environment:
+      FINESSE_ENV: production
+      SALES_DRY_RUN: "true"
+      SALES_LIVE_OUTREACH_ENABLED: "false"
+      DATABASE_URL: postgresql://finesse:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/finesse
+      REDIS_URL: redis://redis:6379/0
+    command: ["python", "-m", "engine.security.worker"]
+    volumes:
+      - finesse-data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    user: "${FINESSE_UID:-10001}:${FINESSE_GID:-10001}"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: finesse
+      POSTGRES_USER: finesse
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    user: postgres
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /run/postgresql
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U finesse -d finesse"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    user: redis
+    read_only: true
+    tmpfs:
+      - /data
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+
+volumes:
+  finesse-data:
+  finesse-vault:
+  postgres-data:

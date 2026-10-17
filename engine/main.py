@@ -1139,3 +1139,9 @@ if (_HUB_DIST / "index.html").exists():
     app.mount("/hub", StaticFiles(directory=str(_HUB_DIST), html=True), name="hub")
 else:
     print(f"[hub] galaxy bundle missing at {_HUB_DIST}")
+
+_WORKSPACE_DIST = _WEB / "react-ui"
+if (_WORKSPACE_DIST / "index.html").exists():
+    from fastapi.staticfiles import StaticFiles
+    app.mount("/workspace", StaticFiles(
+        directory=str(_WORKSPACE_DIST), html=True), name="workspace")

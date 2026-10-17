@@ -26,6 +26,7 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+frontend/node_modules/
 # os
 .DS_Store
 Thumbs.db

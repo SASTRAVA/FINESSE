@@ -1,0 +1,62 @@
+:root {
+  color: #e8eef8;
+  background: #0b1220;
+  font: 16px/1.5 Inter, ui-sans-serif, system-ui, sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  --surface: #121d2d;
+  --border: #26374b;
+  --muted: #9aabc0;
+  --accent: #65d8cf;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 320px; min-height: 100vh; }
+button, input, textarea { font: inherit; }
+button, .nav-link { min-height: 42px; }
+button { color: #081622; background: var(--accent); border: 1px solid transparent; border-radius: 9px; padding: 9px 14px; font-weight: 650; cursor: pointer; }
+button:disabled { cursor: wait; opacity: .65; }
+button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible { outline: 3px solid #f7d56a; outline-offset: 3px; }
+input, textarea { width: 100%; color: inherit; background: #09111d; border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+textarea { min-height: 100px; resize: vertical; }
+a { color: var(--accent); }
+h1, h2, p { margin-top: 0; }
+h1 { margin-bottom: 0; font-size: clamp(1.6rem, 3vw, 2.2rem); }
+h2 { font-size: 1rem; margin-bottom: 8px; }
+.login-wrap { min-height: 100vh; display: grid; place-items: center; padding: 20px; }
+.login-card { width: min(440px, 100%); background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 26px; box-shadow: 0 24px 70px #0005; }
+.login-card label, .form-grid label { display: block; margin: 10px 0 5px; color: var(--muted); }
+.login-card input { margin-bottom: 10px; }
+.eyebrow { color: var(--accent); font-size: .73rem; font-weight: 750; letter-spacing: .12em; text-transform: uppercase; }
+.app-shell { min-height: 100vh; }
+.topbar { height: 64px; display: flex; align-items: center; gap: 18px; border-bottom: 1px solid var(--border); padding: 0 24px; }
+.wordmark { color: #fff; font-weight: 800; letter-spacing: .12em; text-decoration: none; }
+.status-badge, .hint { color: var(--muted); font-size: .86rem; }
+.topbar .quiet { margin-left: auto; }
+.quiet { color: #d8e5f3; background: transparent; border-color: var(--border); }
+.layout { display: grid; grid-template-columns: 230px minmax(0, 1fr); min-height: calc(100vh - 64px); }
+.sidebar { display: flex; flex-direction: column; gap: 6px; padding: 20px 14px; border-right: 1px solid var(--border); }
+.nav-item { text-align: left; color: #c8d6e7; background: transparent; border-color: transparent; }
+.nav-item.active { color: var(--accent); background: #65d8cf12; border-color: #65d8cf44; }
+.nav-link { display: flex; align-items: center; padding: 8px 14px; font-size: .9rem; }
+.content { width: min(1160px, 100%); margin: 0 auto; padding: 28px; }
+.page-heading { display: flex; align-items: end; justify-content: space-between; margin-bottom: 18px; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 18px; margin-bottom: 14px; }
+.card pre { overflow: auto; max-height: 290px; white-space: pre-wrap; overflow-wrap: anywhere; color: #bfd1e6; font: .82rem/1.5 ui-monospace, monospace; }
+.form-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; }
+.form-grid button { justify-self: start; margin-top: 8px; }
+.check { display: flex !important; align-items: center; gap: 8px; }
+.check input { width: auto; }
+.danger { color: #fff; background: #ae3c48; }
+.alert { white-space: pre-wrap; overflow-wrap: anywhere; border-radius: 9px; padding: 10px 12px; }
+.error { color: #ffdbe0; background: #7d243344; border: 1px solid #a5404d; }
+.success { color: #d2f3e5; background: #1b624144; border: 1px solid #338a65; max-height: 260px; overflow: auto; }
+.status-area:empty { display: none; }
+@media (max-width: 720px) {
+  .layout { grid-template-columns: 1fr; }
+  .sidebar { flex-direction: row; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--border); }
+  .nav-item { flex: 0 0 auto; }
+  .nav-link { display: none; }
+  .content { padding: 18px 14px; }
+}
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; } }

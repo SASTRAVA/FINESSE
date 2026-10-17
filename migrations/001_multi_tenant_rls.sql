@@ -8,7 +8,7 @@ DECLARE
         'leads', 'lead_campaigns', 'email_messages', 'email_events', 'calls',
         'consent_records', 'suppression_entries', 'activities', 'meetings', 'jobs',
         'audit_logs', 'gatekeeper_approvals', 'scan_tasks', 'scan_findings',
-        'scan_evidence', 'catalog_repositories'
+        'scan_evidence', 'catalog_repositories', 'tenant_secrets'
     ];
 BEGIN
     FOREACH table_name IN ARRAY tenant_tables LOOP
@@ -17,8 +17,8 @@ BEGIN
         EXECUTE format('DROP POLICY IF EXISTS tenant_isolation_policy ON %I', table_name);
         EXECUTE format(
             'CREATE POLICY tenant_isolation_policy ON %I USING '
-            || '(tenant_id = current_setting(''app.current_tenant_id'')::uuid) '
-            || 'WITH CHECK (tenant_id = current_setting(''app.current_tenant_id'')::uuid)',
+            || '(tenant_id::text = current_setting(''app.current_tenant_id'', true)) '
+            || 'WITH CHECK (tenant_id::text = current_setting(''app.current_tenant_id'', true))',
             table_name
         );
     END LOOP;

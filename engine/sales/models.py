@@ -37,6 +37,8 @@ class VoiceCallIn(BaseModel):
     consent_confirmed: bool = False
     approved_script: bool = False
     handoff_requested: bool = False
+    tainted: bool = False
+    idempotency_key: str | None = Field(default=None, min_length=1, max_length=200)
 
 
 class CampaignPlanIn(BaseModel):

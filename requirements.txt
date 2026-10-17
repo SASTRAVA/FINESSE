@@ -33,6 +33,8 @@ pydantic-settings==2.7.1
 python-dotenv==1.0.1
 tenacity==9.0.0                  # retry/backoff around free-tier rate limits
 redis==5.2.1                    # optional shared login-throttle backend
+cryptography==44.0.0            # tenant-bound provider credential encryption
+psycopg[binary]==3.2.4           # optional PostgreSQL RLS persistence backend
 numpy==2.2.1
 
 # ------------------------------------------------------------

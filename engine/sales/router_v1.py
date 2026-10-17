@@ -4,13 +4,21 @@ from __future__ import annotations
 import time
 import re
 import hashlib
+import json
+import jwt
 from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi.responses import Response
+from jwt import PyJWTError
 
-from ..auth.security import decode_token, make_token
+from ..auth.security import (
+    decode_token, make_token, make_gatekeeper_approval, verify_gatekeeper_approval,
+)
+from ..config import cfg
 from ..auth.users import users
 from ..db.storage import storage
+from ..db.tenant_secrets import TenantSecretStore
 from ..knowledge.universal_catalog import REPOSITORY_SEEDS, certify_candidate
 from ..mcp.base import mcp
 from ..orchestra.langgraph_conjunction import conjunction_engine
@@ -29,6 +37,11 @@ from .models import (
 )
 from .services_catalog import SERVICES, get_service
 from .voice_engine import prepare_voice_call
+from .providers import (
+    CalendarSync, EmailDelivery, LeadEnrichment, ProviderPolicyError, VoiceDelivery,
+    build_voice_callback_url, create_calendar_invite, scrub_external_secrets,
+    scrub_provider_text, verify_twilio_signature, verify_webhook_signature,
+)
 
 router = APIRouter(prefix="/api/v1", tags=["enterprise-platform"])
 _bearer = HTTPBearer(auto_error=False)
@@ -509,14 +522,50 @@ async def send_email_dry_run(body: dict, user: dict = Depends(current_sales_user
     _require_role(user, _CAMPAIGN_ROLES)
     if body.get("tainted"):
         raise HTTPException(400, "untrusted context cannot initiate email delivery")
-    return {"status": "dry_run_only", "sent": False,
-            "detail": "No live email provider is configured by this safe-foundations build."}
+    message_id = str(body.get("message_id", ""))
+    message = storage.get("email_messages", _tenant(user), message_id) if message_id else None
+    if message is None:
+        raise HTTPException(404, "draft message not found")
+    lead = storage.get("leads", _tenant(user), str(message.get("lead_id", "")))
+    if lead is None:
+        raise HTTPException(404, "lead not found")
+    if (not lead.get("eligible_for_outreach")
+            or lead.get("email_verification_status") != "verified"):
+        raise HTTPException(403, "lead must be verified and approved for email outreach")
+    if message.get("campaign_id"):
+        campaign = storage.get("campaigns", _tenant(user), message["campaign_id"])
+        if not campaign or campaign.get("status") != "approved":
+            raise HTTPException(409, "campaign approval is required before delivery")
+    consent = storage.get("consent_records", _tenant(user), lead["id"])
+    if (not body.get("consent_confirmed") or not consent
+            or not consent.get("consented")
+            or consent.get("purpose") not in {"email_campaign", "email_marketing"}
+            or storage.get("suppression_entries", _tenant(user), lead["id"])):
+        raise HTTPException(403, "documented email consent and non-suppressed status are required")
+    idempotency_key = str(body.get("idempotency_key") or "")
+    if not idempotency_key:
+        raise HTTPException(422, "idempotency_key is required")
+    try:
+        result = await EmailDelivery().deliver(
+            tenant_id=_tenant(user), message_id=message_id,
+            recipient=str(lead.get("email", "")), subject=str(message["subject"]),
+            body=str(message["body"]), idempotency_key=idempotency_key,
+            unsubscribe_url=f"{cfg.PUBLIC_BASE_URL}/api/v1/email/unsubscribe/"
+                            f"{_email_unsubscribe_token(_tenant(user), lead['id'])}")
+    except ProviderPolicyError as exc:
+        raise HTTPException(503, str(exc)) from exc
+    if result.get("sent"):
+        message["status"] = "sent"
+        storage.put("email_messages", _tenant(user), message_id, message)
+    return result
 
 
 @router.post("/voice/calls")
 async def voice_call(body: VoiceCallIn, user: dict = Depends(current_sales_user)):
     _require_not_stopped()
     _require_role(user, _CAMPAIGN_ROLES)
+    if body.tainted:
+        raise HTTPException(400, "untrusted context cannot initiate voice calling")
     lead = storage.get("leads", _tenant(user), body.lead_id)
     if lead is None:
         raise HTTPException(404, "lead not found")
@@ -532,7 +581,47 @@ async def voice_call(body: VoiceCallIn, user: dict = Depends(current_sales_user)
             handoff_requested=body.handoff_requested, local_hour=datetime.now().hour)
     except (PermissionError, ValueError) as exc:
         raise HTTPException(403, str(exc)) from exc
-    call_id = f"{lead['id']}:{time.time_ns()}"
+    if result.get("status") == "queued":
+        from .compliance import calling_eligibility
+        eligible, reason = calling_eligibility(
+            tenant_id=_tenant(user), contact_id=lead["id"],
+            consent_confirmed=body.consent_confirmed, local_hour=datetime.now().hour)
+        if not eligible:
+            raise HTTPException(403, reason)
+        if (cfg.VOICE_LIVE_ENABLED and not cfg.SALES_DRY_RUN
+                and not body.idempotency_key):
+            raise HTTPException(422, "idempotency_key is required for live voice calls")
+        script = ("Hello, this is an automated assistant calling on behalf of SASTRAVA "
+                  f"about {get_service(body.service_id)['name']}. We are calling to ask "
+                  "whether your organization would like to discuss this service. You may "
+                  "request a person or say stop to opt out.")
+        args = {"lead_id": body.lead_id, "service_id": body.service_id,
+                "script_sha256": hashlib.sha256(script.encode("utf-8")).hexdigest()}
+        authorization = make_gatekeeper_approval(
+            user["sub"], "twilio_call", args, tenant_id=_tenant(user), ttl_s=60)
+        if not verify_gatekeeper_approval(
+                authorization, user["sub"], "twilio_call", args, tenant_id=_tenant(user)):
+            raise HTTPException(403, "voice command authorization could not be verified")
+        key = body.idempotency_key or f"{lead['id']}:{time.time_ns()}"
+        call_id = "call:" + hashlib.sha256(f"{_tenant(user)}:{key}".encode()).hexdigest()[:32]
+        if not storage.put_if_absent("calls", _tenant(user), call_id, {
+                "id": call_id, "status": "delivery_reserved", "lead_id": lead["id"]}):
+            previous = storage.get("calls", _tenant(user), call_id) or {}
+            if previous.get("status") == "delivery_reserved":
+                return {"id": call_id, "status": "delivery_uncertain",
+                        "call_placed": False,
+                        "detail": "A prior provider attempt requires manual reconciliation."}
+            return previous
+        try:
+            delivery = await VoiceDelivery().start_call(
+                tenant_id=_tenant(user), contact_id=lead["id"],
+                to=str(lead.get("phone", "")), script=script,
+                authorization_verified=True)
+        except ProviderPolicyError as exc:
+            raise HTTPException(503, str(exc)) from exc
+        result.update(delivery)
+    else:
+        call_id = f"{lead['id']}:{time.time_ns()}"
     storage.put("calls", _tenant(user), call_id, {"id": call_id, **result})
     return {"id": call_id, **result}
 
@@ -606,7 +695,7 @@ async def summarize_voice_call(call_id: str, body: dict,
     record = storage.get("calls", _tenant(user), call_id)
     if record is None:
         raise HTTPException(404, "call not found")
-    record["summary"] = str(body.get("summary", ""))[:2000]
+    record["summary"] = scrub_provider_text(str(body.get("summary", ""))[:2000])
     record["summary_tainted"] = True
     storage.put("calls", _tenant(user), call_id, record)
     return {"id": call_id, "summary_tainted": True}
@@ -628,7 +717,8 @@ async def voice_event(body: dict, user: dict = Depends(current_sales_user)):
 @router.post("/webhooks/voice/transcripts")
 async def voice_transcript(body: dict, user: dict = Depends(current_sales_user)):
     transcript = str(body.get("transcript", ""))
-    return {"received": bool(transcript), "tainted": True, "campaign_triggered": False}
+    return {"received": bool(scrub_provider_text(transcript)),
+            "tainted": True, "campaign_triggered": False}
 
 
 @router.post("/webhooks/voice/recordings")
@@ -704,6 +794,280 @@ async def calendar_slots(_user: dict = Depends(current_sales_user)):
 @router.get("/calendar/meetings")
 async def calendar_meetings(user: dict = Depends(current_sales_user)):
     return {"meetings": storage.list("meetings", _tenant(user), limit=1000)}
+
+
+def _email_unsubscribe_token(tenant_id: str, contact_id: str) -> str:
+    return jwt.encode({
+        "purpose": "email_unsubscribe", "tenant_id": tenant_id, "contact_id": contact_id,
+        "exp": int(time.time()) + 31536000,
+    }, cfg.JWT_SECRET, algorithm="HS256")
+
+
+@router.get("/email/unsubscribe/{token}")
+@router.post("/email/unsubscribe/{token}")
+async def unsubscribe_from_email(token: str):
+    try:
+        claims = jwt.decode(token, cfg.JWT_SECRET, algorithms=["HS256"])
+    except PyJWTError as exc:
+        raise HTTPException(400, "unsubscribe link is invalid or expired") from exc
+    if (claims.get("purpose") != "email_unsubscribe" or not claims.get("tenant_id")
+            or not claims.get("contact_id")):
+        raise HTTPException(400, "unsubscribe link is invalid")
+    from .compliance import suppress_contact
+    suppress_contact(claims["tenant_id"], claims["contact_id"], reason="unsubscribe")
+    return {"unsubscribed": True}
+
+
+@router.post("/calendar/meetings")
+async def create_meeting(body: dict, user: dict = Depends(current_sales_user)):
+    _require_role(user, _READ_ROLES)
+    meeting_id = f"meeting:{time.time_ns()}"
+    attendee = str(body.get("attendee", ""))
+    organizer = str(user.get("email") or user.get("sub", ""))
+    if not body.get("subject") or len(str(body["subject"])) > 200:
+        raise HTTPException(422, "a meeting subject of at most 200 characters is required")
+    try:
+        ics = create_calendar_invite(
+            uid=meeting_id, subject=str(body["subject"]),
+            start=str(body.get("start", "")), end=str(body.get("end", "")),
+            organizer=organizer, attendee=attendee)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    meeting = {"id": meeting_id, "subject": str(body["subject"]),
+               "start": str(body["start"]), "end": str(body["end"]),
+               "organizer": organizer, "attendee": attendee, "status": "local"}
+    sync = {"status": "local_only", "synced": False}
+    if body.get("sync_confirmed"):
+        contact_id = str(body.get("contact_id", ""))
+        consent = storage.get("consent_records", _tenant(user), contact_id)
+        if (not contact_id or not consent or not consent.get("consented")
+                or consent.get("purpose") not in {"calendar_invite", "calendar_sync"}):
+            raise HTTPException(403, "recorded consent is required for external calendar sync")
+        sync_key = str(body.get("idempotency_key", ""))
+        if (cfg.CALENDAR_SYNC_ENABLED and cfg.CALENDAR_PROVIDER != "local"
+                and (not sync_key or len(sync_key) > 200)):
+            raise HTTPException(422, "a bounded idempotency_key is required for calendar sync")
+        try:
+            sync = await CalendarSync().sync(
+                meeting, tenant_id=_tenant(user), idempotency_key=sync_key or meeting_id)
+        except ProviderPolicyError as exc:
+            raise HTTPException(503, str(exc)) from exc
+    meeting["sync"] = sync
+    storage.put("meetings", _tenant(user), meeting_id, meeting)
+    return {"meeting": meeting, "ics": ics}
+
+
+@router.post("/leads/{lead_id}/enrich")
+async def enrich_lead(lead_id: str, body: dict, user: dict = Depends(current_sales_user)):
+    _require_role(user, _CAMPAIGN_ROLES)
+    lead = storage.get("leads", _tenant(user), lead_id)
+    if lead is None:
+        raise HTTPException(404, "lead not found")
+    consent = storage.get("consent_records", _tenant(user), lead_id)
+    suppression = storage.get("suppression_entries", _tenant(user), lead_id)
+    if (not body.get("consent_confirmed") or not consent or not consent.get("consented")
+            or consent.get("purpose") != "lead_enrichment"
+            or suppression):
+        raise HTTPException(403, "current consent and non-suppressed status are required")
+    domain = str(lead.get("domain") or lead.get("website") or "")
+    domain = re.sub(r"^https?://", "", domain).split("/", 1)[0]
+    try:
+        result = await LeadEnrichment().enrich(domain, tenant_id=_tenant(user))
+    except ProviderPolicyError as exc:
+        raise HTTPException(503, str(exc)) from exc
+    if result.get("enriched"):
+        result["data"] = scrub_external_secrets(result["data"])
+        if len(json.dumps(result.get("data"), ensure_ascii=True)) > 32000:
+            raise HTTPException(502, "enrichment response exceeds the 32 KB limit")
+        lead["enrichment"] = {"data": result["data"], "tainted": True,
+                              "received_at": time.time()}
+        storage.put("leads", _tenant(user), lead_id, lead)
+    return result
+
+
+@router.post("/webhooks/providers/email")
+async def provider_email_webhook(request: Request):
+    body = await _provider_webhook_body(request, "email_webhook_signing_secret")
+    tenant_id, event_id = str(body.get("tenant_id", "")), str(body.get("event_id", ""))
+    if not event_id or len(event_id) > 200:
+        raise HTTPException(422, "event_id is required and must not exceed 200 characters")
+    event = str(body.get("event", "")).casefold()
+    contact_id = str(body.get("contact_id", ""))
+    if event in {"unsubscribe", "opt_out", "stop"} and (
+            not contact_id or len(contact_id) > 200):
+        raise HTTPException(422, "contact_id is required for an opt-out event")
+    if event in {"unsubscribe", "opt_out", "stop"}:
+        from .compliance import suppress_contact
+        suppress_contact(tenant_id, contact_id, reason="provider_opt_out")
+    if not storage.put_if_absent("email_events", tenant_id, "provider:" + event_id, {
+            "id": event_id, "event": "received", "tainted": True,
+            "content_received": bool(body.get("body"))}):
+        return {"accepted": True, "duplicate": True}
+    return {"accepted": True, "duplicate": False, "tainted": True}
+
+
+@router.post("/webhooks/providers/voice")
+async def provider_voice_webhook(request: Request):
+    if request.headers.get("content-type", "").startswith(
+            "application/x-www-form-urlencoded"):
+        return await _twilio_voice_status_webhook(request)
+    body = await _provider_webhook_body(request, "voice_webhook_signing_secret")
+    tenant_id, event_id = str(body.get("tenant_id", "")), str(body.get("event_id", ""))
+    if not event_id or len(event_id) > 200:
+        raise HTTPException(422, "event_id is required and must not exceed 200 characters")
+    event = str(body.get("event", "")).casefold()
+    contact_id = str(body.get("contact_id", ""))
+    if event in {"unsubscribe", "opt_out", "stop"} and (
+            not contact_id or len(contact_id) > 200):
+        raise HTTPException(422, "contact_id is required for an opt-out event")
+    if event in {"unsubscribe", "opt_out", "stop"}:
+        from .compliance import suppress_contact
+        suppress_contact(tenant_id, contact_id, reason="provider_opt_out")
+    if not storage.put_if_absent("email_events", tenant_id, "voice-provider:" + event_id, {
+            "id": event_id, "event": str(body.get("event", ""))[:60]}):
+        return {"accepted": True, "duplicate": True}
+    transcript = scrub_provider_text(str(body.get("transcript", "")))
+    return {"accepted": True, "duplicate": False, "transcript_received": bool(transcript),
+            "transcript_persisted": False, "tainted": True}
+
+
+@router.post("/webhooks/providers/voice/opt-out")
+async def provider_voice_opt_out_webhook(request: Request):
+    return await _twilio_voice_opt_out_webhook(request)
+
+
+async def _twilio_voice_status_webhook(request: Request):
+    tenant_id = request.query_params.get("tenant_id", "")
+    if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,127}", tenant_id):
+        raise HTTPException(422, "valid tenant_id query parameter is required")
+    form = await _verified_twilio_form(request, tenant_id, opt_out=False)
+    call_sid, status = str(form.get("CallSid", "")), str(form.get("CallStatus", ""))
+    if not call_sid or len(call_sid) > 100 or not status or len(status) > 60:
+        raise HTTPException(422, "CallSid and CallStatus are required")
+    event_id = f"twilio-status:{call_sid}:{status}"
+    storage.put_if_absent("email_events", tenant_id, event_id, {
+        "id": event_id, "type": "voice_status", "event": status})
+    return {"accepted": True}
+
+
+async def _twilio_voice_opt_out_webhook(request: Request) -> Response:
+    tenant_id = request.query_params.get("tenant_id", "")
+    contact_id = request.query_params.get("contact_id", "")
+    if (not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,127}", tenant_id)
+            or not contact_id or len(contact_id) > 200):
+        raise HTTPException(422, "valid tenant_id and contact_id are required")
+    form = await _verified_twilio_form(request, tenant_id, opt_out=True,
+                                       contact_id=contact_id)
+    call_sid = str(form.get("CallSid", ""))
+    if not call_sid or len(call_sid) > 100:
+        raise HTTPException(422, "CallSid is required")
+    speech = str(form.get("SpeechResult", "")).casefold()
+    digits = str(form.get("Digits", ""))
+    opted_out = digits == "9" or bool(re.search(
+        r"\b(?:stop|unsubscribe|remove me|opt[\s-]?out)\b", speech))
+    if opted_out:
+        from .compliance import suppress_contact
+        suppress_contact(tenant_id, contact_id, reason="voice_opt_out")
+        event_id = "voice-opt-out:" + hashlib.sha256(
+            f"{tenant_id}:{contact_id}:{call_sid}".encode()).hexdigest()
+        storage.put_if_absent("email_events", tenant_id, event_id, {
+            "id": event_id, "type": "voice_opt_out", "contact_id": contact_id})
+        xml = "<Response><Say>Your opt-out was recorded. Goodbye.</Say><Hangup/></Response>"
+    else:
+        xml = "<Response><Say>Thank you. Goodbye.</Say><Hangup/></Response>"
+    return Response(content=xml, media_type="application/xml")
+
+
+async def _verified_twilio_form(request: Request, tenant_id: str, *,
+                                opt_out: bool, contact_id: str = ""):
+    length = request.headers.get("content-length")
+    if length and length.isdigit() and int(length) > 100_000:
+        raise HTTPException(413, "voice callback exceeds 100 KB")
+    auth_token = TenantSecretStore().get(tenant_id, "twilio_auth_token")
+    if auth_token is None and tenant_id == "default":
+        auth_token = cfg.TWILIO_AUTH_TOKEN
+    if not auth_token:
+        raise HTTPException(503, "tenant Twilio callback credential is not configured")
+    if not cfg.VOICE_WEBHOOK_URL:
+        raise HTTPException(503, "VOICE_WEBHOOK_URL is not configured")
+    callback_url = build_voice_callback_url(
+        cfg.VOICE_WEBHOOK_URL, tenant_id=tenant_id,
+        suffix="/opt-out" if opt_out else "",
+        contact_id=contact_id if opt_out else "")
+    form = await request.form()
+    parameters = [(key, str(value)) for key, value in form.multi_items()]
+    if not verify_twilio_signature(
+            callback_url, parameters, request.headers.get("x-twilio-signature", ""),
+            auth_token):
+        raise HTTPException(401, "invalid Twilio callback signature")
+    return form
+
+
+async def _provider_webhook_body(request: Request, secret_name: str) -> dict:
+    length = request.headers.get("content-length")
+    if length and length.isdigit() and int(length) > 1_000_000:
+        raise HTTPException(413, "provider webhook payload exceeds 1 MB")
+    raw = await request.body()
+    try:
+        body = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise HTTPException(400, "invalid webhook payload") from exc
+    if not isinstance(body, dict):
+        raise HTTPException(400, "provider webhook payload must be an object")
+    tenant_id = str(body.get("tenant_id", ""))
+    if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,127}", tenant_id):
+        raise HTTPException(422, "tenant_id is required")
+    secret = TenantSecretStore().get(tenant_id, secret_name)
+    if secret is None and tenant_id == "default":
+        secret = cfg.WEBHOOK_SIGNING_SECRET
+    if secret is None:
+        raise HTTPException(503, "tenant-specific webhook signing secret is not configured")
+    if not verify_webhook_signature(
+            raw, request.headers.get("x-finesse-signature", ""), secret):
+        raise HTTPException(401, "invalid provider webhook signature")
+    return body
+
+
+_PROVIDER_SECRET_NAMES = {
+    "smtp_password", "email_webhook_token", "twilio_account_sid", "twilio_auth_token",
+    "twilio_caller_id",
+    "enrichment_api_token", "calendar_api_token", "email_webhook_signing_secret",
+    "voice_webhook_signing_secret",
+}
+
+
+@router.put("/settings/provider-secrets")
+async def set_provider_secret(body: dict, user: dict = Depends(current_sales_user)):
+    _require_not_stopped()
+    _require_role(user, {"CEO", "COO"})
+    name, secret = str(body.get("name", "")), body.get("secret")
+    if name not in _PROVIDER_SECRET_NAMES or not isinstance(secret, str) or not secret:
+        raise HTTPException(422, "a supported secret name and non-empty secret are required")
+    if len(secret.encode("utf-8")) > 4096:
+        raise HTTPException(422, "provider secret exceeds the 4096-byte limit")
+    if name.endswith("signing_secret") and len(secret.encode("utf-8")) < 32:
+        raise HTTPException(422, "webhook signing secrets must contain at least 32 bytes")
+    try:
+        TenantSecretStore().put(_tenant(user), name, secret)
+    except RuntimeError as exc:
+        raise HTTPException(503, str(exc)) from exc
+    storage.put("audit_logs", _tenant(user), f"secret:{name}:{time.time_ns()}", {
+        "event": "provider_secret_updated", "name": name, "actor_sub": user["sub"],
+        "at": time.time()})
+    return {"stored": True, "name": name, "secret_returned": False}
+
+
+@router.delete("/settings/provider-secrets/{name}")
+async def delete_provider_secret(name: str, user: dict = Depends(current_sales_user)):
+    _require_not_stopped()
+    _require_role(user, {"CEO", "COO"})
+    if name not in _PROVIDER_SECRET_NAMES:
+        raise HTTPException(404, "provider secret not found")
+    deleted = TenantSecretStore().delete(_tenant(user), name)
+    storage.put("audit_logs", _tenant(user), f"secret-delete:{name}:{time.time_ns()}", {
+        "event": "provider_secret_deleted", "name": name, "actor_sub": user["sub"],
+        "at": time.time()})
+    return {"deleted": deleted, "name": name}
 
 
 @router.post("/compliance/check")

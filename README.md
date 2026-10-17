@@ -18,8 +18,8 @@ orchestrator, a FastAPI service, and browser dashboards.
   plan, reason, use read tools, and produce a deliverable.
 - Stores vectors in local Qdrant and writes deliverables and selected memory
   back to the configured vault.
-- Provides a FastAPI API, a JARVIS-style browser interface, and a live event
-  stream.
+- Provides a FastAPI API, a JARVIS-style browser interface, a typed React
+  operator workspace, and a live event stream.
 - Keeps external write tools behind an explicit approval step.
 - Provides SASTRAVA service catalogs, six lane-scoped consulting specialists,
   public website/GitHub knowledge sync, and Listen → Shape → Deliver workflows.
@@ -41,21 +41,22 @@ audit, and event-stream routes remain restricted to the default tenant rather
 than returning cross-tenant data.
 
 The conjunction engine selects review-only workflow plans and explicitly
-reports that it performed no external side effects. `engine/db/storage.py`
-provides SQLite JSON-record persistence with tenant-keyed reads/writes, and
-`migrations/001_multi_tenant_rls.sql` is a PostgreSQL RLS companion template;
-the application does not currently use PostgreSQL. Some legacy session,
-account, audit, and runtime state is still file-backed or process-local, so
-this is not yet a horizontally scaled multi-tenant service.
+reports that it performed no external side effects. `engine/db/storage.py` provides tenant-keyed SQLite JSON persistence by
+default. When `DATABASE_URL` uses PostgreSQL, it stores JSONB records and sets
+`app.current_tenant_id` transaction-locally on every operation; PostgreSQL RLS
+policies are installed on the tenant tables. `REDIS_URL` enables shared
+account/IP login throttling. Legacy session, account, audit, and runtime state
+is still partly file-backed or process-local.
 
 Sales lead generation uses deterministic synthetic records while
-`SALES_DRY_RUN=true` (the default). It does not search for real prospects or
-create contact-ready outreach. Email and voice features create drafts or
-previews only; there are no live send/call adapters. Security tooling creates
-authorized review plans and does not run scans by default. Repository catalog
-seeds are marked discovered/source-inventory-only, not certified. Importing
-catalog candidates requires an explicit input file; no broad workspace scan is
-performed.
+`SALES_DRY_RUN=true` (the default). Email and voice adapters, enrichment, and
+calendar synchronization are opt-in; live effects require separate enable
+flags, tenant consent/suppression checks, and explicit user authorization.
+Provider credentials can be encrypted at rest with `KMS_MASTER_KEY`. Calendar
+invites can be produced locally as RFC 5545 ICS without syncing externally.
+Security tooling creates authorized review plans and does not run scanners;
+the security worker only advances plans to human review. Repository catalog
+seeds are marked discovered/source-inventory-only, not certified.
 
 Authenticated human-confirmed pattern learning is available at
 `POST /api/v1/memory/patterns`. The route requires an explicit
@@ -216,10 +217,82 @@ Start FINESSE:
 python run.py
 ```
 
-Open `http://127.0.0.1:8600`. Local vault content, uploads, user records,
+Open `http://127.0.0.1:8600`; use `/workspace/` for the React workspace, `/`
+and `/command` for the standalone dashboards. Node is only needed when changing
+the frontend source:
+
+```powershell
+cd frontend
+npm ci
+npm run build
+```
+
+The built workspace is served by FastAPI and the standalone HTML dashboards
+link to it. Its typed React/Vite source lives in `frontend/`.
+
+Local vault content, uploads, user records,
 vector data, audit logs, and credentials are intentionally excluded from this
 public source repository. Point `VAULT_PATH` at a vault you control; do not
 publish that vault.
+
+### Opt-in providers
+
+Every provider defaults to sandbox/local behavior. Live email requires
+`SALES_DRY_RUN=false`, `SALES_LIVE_OUTREACH_ENABLED=true`, and
+`EMAIL_LIVE_ENABLED=true`, an approved draft/campaign, current
+`email_campaign` or `email_marketing` consent, and a non-suppressed contact.
+Select `EMAIL_PROVIDER=smtp` with STARTTLS settings or `webhook` with an
+HTTPS public endpoint. Calls additionally require `VOICE_LIVE_ENABLED=true`,
+an explicit parsed call command, written `voice_call` consent, a verified
+eligible contact, a fixed approved disclosure script, a single-use
+Gatekeeper approval, and allowed calling hours. Twilio is the only live voice
+adapter. Do not use synthetic sandbox leads for live outreach.
+For Twilio, set `VOICE_WEBHOOK_URL` to the public HTTPS
+`/api/v1/webhooks/providers/voice` endpoint. Status callbacks validate
+`X-Twilio-Signature` against that exact URL and the tenant's Twilio auth token.
+Calls include a signed tenant/contact-scoped Gather callback at
+`/api/v1/webhooks/providers/voice/opt-out`; saying "stop" (or pressing 9)
+records a tenant-scoped suppression entry. The callback handlers store status
+and opt-out metadata only, not speech transcripts.
+
+Enrichment is disabled unless `SALES_ENRICHMENT_ENABLED=true`; it sends only a
+consented company's domain to the configured HTTPS endpoint. Calendar is local
+by default (`CALENDAR_PROVIDER=local`); ICS creation does not contact a
+provider. External calendar webhooks additionally require
+`CALENDAR_SYNC_ENABLED=true`, explicit sync confirmation, recorded calendar
+consent, HTTPS, and an idempotency key. Generic JSON callbacks must include a
+valid `X-Finesse-Signature: sha256=<hex>` HMAC-SHA256 signature; Twilio form
+callbacks use `X-Twilio-Signature` validation instead. Email and voice opt-outs
+create a tenant-scoped suppression record; raw webhook transcripts/content
+are not stored. Non-default tenants must configure their own encrypted
+provider signing keys and Twilio auth token; `WEBHOOK_SIGNING_SECRET` is only
+a fallback for generic callbacks from the `default` tenant.
+
+For per-tenant credentials, use the CEO/COO-only provider-secret API; a
+random, independently managed `KMS_MASTER_KEY` (at least 32 bytes) is required
+for AES-GCM envelope encryption. Keep the master key outside the database and
+back it up separately. Global environment credentials remain an optional
+operator-managed fallback.
+
+### PostgreSQL, Redis, and rootless deployment
+
+SQLite remains the local default. To use PostgreSQL, set `DATABASE_URL` to a
+`postgres://` or `postgresql://` connection and apply
+`migrations/001_multi_tenant_rls.sql` after the tenant tables exist. Every
+storage operation binds its trusted tenant ID in the transaction using
+parameterized `set_config('app.current_tenant_id', ..., true)`; deploy with a
+database role that is not a superuser and does not have `BYPASSRLS`. Use Redis
+via `REDIS_URL` for shared login throttling across API workers.
+
+The rootless Compose deployment and operations runbook are in
+[`deploy/`](deploy/README.md). It publishes the API only on host loopback and
+uses non-root processes, read-only root filesystems, dropped Linux
+capabilities, and `no-new-privileges`. Set a random `POSTGRES_PASSWORD`,
+production auth secrets, and the exact TLS proxy IP in `TRUSTED_PROXY_IPS`;
+production startup intentionally rejects a non-loopback bind without a
+trusted proxy or explicit override. Provider live flags remain off in Compose.
+The security worker cannot execute scans; it only marks authorized plans for
+operator review.
 
 ## Useful commands
 
@@ -243,6 +316,8 @@ local testing, not production accounts.
 | `engine/agents/` | Agent prompts, registry, execution |
 | `engine/orchestra/` | Planning, concurrent agent runs, synthesis, event bus, memory |
 | `engine/db/storage.py` | Tenant-keyed SQLite JSON records and transaction helpers |
+| `engine/db/tenant_secrets.py` | Per-tenant AES-GCM encrypted provider credentials |
+| `engine/sales/providers.py` | Opt-in email, voice, enrichment, calendar, and webhook adapters |
 | `engine/orchestra/langgraph_conjunction.py` | Deterministic review-only workflow planning |
 | `engine/sales/` | Synthetic sandbox sales flows, drafts, scoring, and tenant APIs |
 | `engine/rag/` | Embeddings, vector storage, retrieval, ingestion |
@@ -251,7 +326,9 @@ local testing, not production accounts.
 | `engine/prompt_guard.py` | Untrusted-content wrapping and injection-pattern detection |
 | `engine/knowledge/` | Sanitized public catalogs, SASTRAVA service lines, and playbooks |
 | `engine/sastrava/` | Consulting workflow construction and service-line routing |
-| `engine/web/` | Browser dashboard pages and bundled Hub UI |
+| `engine/web/` | Standalone dashboards and built React operator workspace |
+| `frontend/` | Typed React 19 / TypeScript / Vite workspace source |
+| `deploy/` | Rootless Compose, container image, and operational runbook |
 | `scripts/` | Vault indexing, public-source sync, and local demo-user utilities |
 | `training/` | Optional dataset export and QLoRA workflows |
 | `voice/` | Optional standalone voice client |
