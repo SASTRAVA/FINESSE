@@ -117,9 +117,15 @@ def _vault_note(node_id: str, stmt: str, data: dict) -> None:
 async def hub_token(form: OAuth2PasswordRequestForm = Depends()):
     """Gatekeeper login using an account from the FINESSE user store."""
     from .auth import users, make_token
+    from .main import login_throttle
+    account = login_throttle.normalize_account(form.username)
+    if not login_throttle.allowed(account=account):
+        raise HTTPException(429, "too many login attempts for this account")
     u = users.authenticate(form.username, form.password)
     if u:
+        login_throttle.succeeded(account=account)
         return {"access_token": make_token(u.email, u.role, u.tier), "token_type": "bearer"}
+    login_throttle.failed(account=account)
     raise HTTPException(401, "Invalid credentials")
 
 
@@ -166,7 +172,7 @@ async def map_idea(stmt: str, user: dict, sensitivity: str = "internal") -> dict
                "step_map": {"steps": steps},
                "swarm_routing": {"plan": {"dispatch": {l: [f"{l}-swarm"] for l in lanes}}},
                "idea_metrics": {"composite": composite, "band": band},
-               "ts": time.time(), "status": "mapped"}
+               "ts": time.time(), "status": "mapped", "sensitivity": egress_sensitivity}
     _NODES[node_id] = payload
 
     # feed the vault + the brain, then let the real agents act on it

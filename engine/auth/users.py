@@ -17,6 +17,16 @@ from .rbac import role_of
 from .security import hash_pw, verify_pw
 
 _DB = cfg.DATA / "users.json"
+_WEAK_PASSWORDS = {"0000", "changeme", "dev-insecure-change-me", "finesse-ceo-2026"}
+
+
+def validate_password_strength(password: str) -> None:
+    if len(password) < 12:
+        raise ValueError("password must be at least 12 characters")
+    if len(password.encode("utf-8")) > 72:
+        raise ValueError("password must not exceed bcrypt's 72-byte limit")
+    if password.strip().casefold() in _WEAK_PASSWORDS:
+        raise ValueError("password is a known placeholder and cannot be used")
 
 
 @dataclass
@@ -57,8 +67,7 @@ class UserStore:
     def _bootstrap_ceo(self):
         if len(cfg.JWT_SECRET) < 32:
             raise RuntimeError("Set JWT_SECRET to a random secret of at least 32 characters.")
-        if len(cfg.CEO_PASSWORD) < 12:
-            raise RuntimeError("Set CEO_PASSWORD to a password of at least 12 characters.")
+        validate_password_strength(cfg.CEO_PASSWORD)
         email = cfg.CEO_EMAIL.lower()
         if email not in self._users:
             self._users[email] = User(
@@ -71,6 +80,7 @@ class UserStore:
         return self._users.get(email.lower())
 
     def create(self, email: str, name: str, role: str, password: str) -> User:
+        validate_password_strength(password)
         email = email.lower()
         if email in self._users:
             raise ValueError("user exists")
@@ -81,6 +91,14 @@ class UserStore:
         self._users[email] = u
         self.save()
         return u
+
+    def change_password(self, email: str, current_password: str, new_password: str) -> None:
+        validate_password_strength(new_password)
+        user = self.get(email)
+        if user is None or not verify_pw(current_password, user.pw_hash):
+            raise ValueError("current password is incorrect")
+        user.pw_hash = hash_pw(new_password)
+        self.save()
 
     def authenticate(self, email: str, password: str) -> Optional[User]:
         u = self.get(email)

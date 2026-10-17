@@ -31,6 +31,24 @@ class DataEgressBlocked(RuntimeError):
     """Raised when sensitivity policy prevents sending a prompt to a cloud provider."""
 
 
+_SENSITIVITY_ORDER = ("public", "internal", "confidential", "restricted")
+
+
+def is_sensitive_for_egress(sensitivity: str) -> bool:
+    if sensitivity not in _SENSITIVITY_ORDER:
+        raise ValueError(f"unsupported sensitivity: {sensitivity}")
+    return sensitivity in ("confidential", "restricted")
+
+
+def ensure_external_egress_allowed(sensitivity: str, channel: str) -> None:
+    if is_sensitive_for_egress(sensitivity) and not cfg.ALLOW_CONFIDENTIAL_EXTERNAL_EGRESS:
+        logging.getLogger("finesse.security").error(
+            "Blocked external %s egress for %s-sensitivity data; payload omitted",
+            channel, sensitivity)
+        raise DataEgressBlocked(
+            f"{sensitivity} data blocked from external {channel} egress by policy")
+
+
 _SECRET_PATTERNS = (
     re.compile(r"(?i)\b(?:nvapi-[A-Za-z0-9_-]{16,}|gsk_[A-Za-z0-9_-]{16,}|"
                r"sk-[A-Za-z0-9_-]{16,}|ghp_[A-Za-z0-9]{20,})\b"),

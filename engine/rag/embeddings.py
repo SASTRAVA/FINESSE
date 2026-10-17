@@ -14,6 +14,7 @@ import hashlib
 from typing import List
 
 from ..config import cfg
+from ..llm.provider import is_sensitive_for_egress, scrub_outbound
 
 _DIM_FALLBACK = 384
 
@@ -60,25 +61,32 @@ class Embedder:
             out.append([x / n for x in vec])
         return out
 
-    async def _embed_nim(self, texts: List[str]) -> List[List[float]]:
-        from openai import AsyncOpenAI
-        client = AsyncOpenAI(base_url=cfg.NIM_BASE_URL, api_key=cfg.NVIDIA_API_KEY)
+    async def _embed_nim(self, texts: List[str], *, client=None) -> List[List[float]]:
+        if client is None:
+            from openai import AsyncOpenAI
+            client = AsyncOpenAI(base_url=cfg.NIM_BASE_URL, api_key=cfg.NVIDIA_API_KEY)
         resp = await client.embeddings.create(
-            model=cfg.EMBEDDINGS_MODEL_NIM, input=texts,
+            model=cfg.EMBEDDINGS_MODEL_NIM,
+            input=[scrub_outbound(text, redact_pii=cfg.REDACT_PII_ON_EXTERNAL_LLM)
+                   for text in texts],
             extra_body={"input_type": "passage"})
         return [d.embedding for d in resp.data]
 
-    async def embed(self, texts: List[str]) -> List[List[float]]:
+    async def embed(self, texts: List[str], *, sensitivity: str = "internal") -> List[List[float]]:
         if not texts:
             return []
+        sensitive = is_sensitive_for_egress(sensitivity)
+        if (self.backend == "nim" and sensitive
+                and not cfg.ALLOW_CONFIDENTIAL_EXTERNAL_EGRESS):
+            return await asyncio.to_thread(self._embed_hash, texts)
         if self.backend == "local":
             return await asyncio.to_thread(self._embed_local, texts)
         if self.backend == "nim":
             return await self._embed_nim(texts)
         return await asyncio.to_thread(self._embed_hash, texts)
 
-    async def embed_one(self, text: str) -> List[float]:
-        return (await self.embed([text]))[0]
+    async def embed_one(self, text: str, *, sensitivity: str = "confidential") -> List[float]:
+        return (await self.embed([text], sensitivity=sensitivity))[0]
 
 
 embedder = Embedder()

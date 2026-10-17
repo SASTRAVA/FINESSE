@@ -205,8 +205,8 @@ function pickVoice(){const vs=speechSynthesis.getVoices();voice=vs.find(v=>/dani
 if('speechSynthesis' in window){speechSynthesis.onvoiceschanged=pickVoice;pickVoice();}
 function endSpeak(cb){speaking=false;currentAudio=null;setState('idle');if(!muted)safeStart();cb&&cb();}
 function browserSpeak(text,cb){if(!('speechSynthesis' in window)){endSpeak(cb);return;}const u=new SpeechSynthesisUtterance(text);if(voice)u.voice=voice;u.rate=1.0;u.pitch=.9;u.onend=()=>endSpeak(cb);speechSynthesis.cancel();speechSynthesis.speak(u);}
-async function speak(text,cb){if(!text){cb&&cb();return;}speaking=true;pendingText='';clearTimeout(silenceTimer);try{rec&&rec.stop();}catch(e){}setState('speak');
-  try{const r=await fetch('/api/tts',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+TOKEN},body:JSON.stringify({text})});
+async function speak(text,cb,sensitivity='internal'){if(!text){cb&&cb();return;}speaking=true;pendingText='';clearTimeout(silenceTimer);try{rec&&rec.stop();}catch(e){}setState('speak');
+  try{const r=await fetch('/api/tts',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+TOKEN},body:JSON.stringify({text,sensitivity})});
     if(r.status===200){const url=URL.createObjectURL(await r.blob());const a=new Audio(url);a.crossOrigin='anonymous';currentAudio=a;
       connectTTS(a);a.onended=()=>{URL.revokeObjectURL(url);endSpeak(cb);};a.onerror=()=>{URL.revokeObjectURL(url);browserSpeak(text,cb);};
       a.play().catch(()=>browserSpeak(text,cb));return;}}catch(e){}
@@ -237,7 +237,7 @@ async function handle(text){text=(text||'').trim();if(!text||busy)return;
   if(SLEEP.test(text)){muted=true;try{rec&&rec.stop();}catch(e){}addMsg('you',text);speak('Standing by, sir. Tap the microphone when you need me.');return;}
   busy=true;addMsg('you',text);setState('think');setStatus('processing…');const t0=performance.now();
   try{const r=await api('/api/voice',{method:'POST',body:JSON.stringify({text})});$('m_lat').textContent=Math.round(performance.now()-t0)+'ms';
-    if(r.action&&r.action!=='chat')showBadge(r.action);addMsg('jarvis',r.speech,r.launched?'▶ executing':'');speak(r.speech);
+    if(r.action&&r.action!=='chat')showBadge(r.action);addMsg('jarvis',r.speech,r.launched?'▶ executing':'');speak(r.speech,null,r.sensitivity||'internal');
   }catch(e){addMsg('jarvis','('+e.message+')');setState('idle');if(!muted)safeStart();}busy=false;}
 async function sendText(){const t=$('txt').value.trim();if(!t)return;$('txt').value='';ensureAudio();if(!TOKEN){$('login').style.display='grid';return;}handle(t);}
 

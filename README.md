@@ -71,12 +71,20 @@ Edit `.env` locally:
 5. Keep `HOST=127.0.0.1` unless you have deliberately configured a secure
    reverse proxy and firewall. The default `CORS_ORIGINS` allowlist is limited
    to local development origins.
+   For production behind TLS termination, set `TRUSTED_PROXY_IPS` to the
+   proxy's exact IP addresses. Forwarded client/protocol headers are ignored
+   unless the immediate peer is allowlisted. `ALLOW_UNENCRYPTED_PUBLIC_BIND`
+   defaults to `false`; only set it to `true` as a conscious deployment
+   override.
 6. Leave `ALLOW_CONFIDENTIAL_EXTERNAL_EGRESS=false`. Confidential or restricted
    prompts require `LOCAL_LLM_BASE_URL`; FINESSE blocks the request before any
-   hosted LLM call if a local endpoint is unavailable.
+   hosted LLM call if a local endpoint is unavailable. Hosted embeddings use a
+   deterministic offline hash backend for confidential/restricted text. TTS
+   requests default to confidential sensitivity and hosted speech is blocked at
+   confidential/restricted levels unless explicitly allowed.
 7. Keep `REDACT_PII_ON_EXTERNAL_LLM=true` to mask emails and phone numbers in
-   provider-bound messages. Recognized API keys and bearer tokens are always
-   redacted before completion-provider requests.
+   provider-bound messages, embeddings, and cloud TTS. Recognized API keys and
+   bearer tokens are always redacted before external-provider requests.
 
 Requests and ingestion endpoints that accept data can include a `sensitivity`
 value (`public`, `internal`, `confidential`, or `restricted`); omitted values
@@ -89,6 +97,8 @@ characters). Startup fails if either value is missing, too short, or matches a
 known placeholder. Set `HOST`, `PORT`, and `CORS_ORIGINS` explicitly for the
 deployment; do not bind publicly without TLS, a trusted reverse proxy, and
 firewall controls.
+Persistent runtime state defaults to `./data`; `FINESSE_DATA_DIR` can relocate
+it when the deployment needs a separate protected storage volume.
 
 Generate a JWT secret:
 
@@ -102,6 +112,22 @@ authorized to process):
 ```powershell
 python run.py --index
 ```
+
+Audit old Qdrant points that lack valid lane/sensitivity metadata without
+modifying them:
+
+```powershell
+python run.py --index --audit-only
+```
+
+Purge only those legacy points before indexing the vault again:
+
+```powershell
+python run.py --index --purge-legacy
+```
+
+The indexer flags are mutually exclusive. `--audit-only` reports a count and
+exits; `--purge-legacy` removes the flagged points, then proceeds with indexing.
 
 Start FINESSE:
 
@@ -163,13 +189,19 @@ local testing, not production accounts.
   override/fake-tool patterns are flagged, external tool results taint the
   execution context, and tainted MCP writes require a short-lived,
   action-bound signed Gatekeeper approval.
-- Hosted LLM egress redacts recognized credentials, optionally masks email and
-  phone PII, and blocks confidential/restricted prompts unless a local model is
-  configured or confidential cloud egress is explicitly enabled.
-- Login endpoints are rate-limited in memory to 10 attempts per source IP per
-  minute. Responses include `nosniff`, `DENY` frame, and no-referrer headers.
-  The limiter is process-local; use a shared gateway limiter for multi-worker
-  or distributed deployments.
+- Hosted LLM, embedding, and TTS egress share credential/PII scrubbing.
+  Confidential/restricted chat and embedding requests stay local by default;
+  cloud TTS is blocked unless confidential egress is explicitly enabled.
+- Login endpoints track failed attempts by both client IP and normalized
+  account. `X-Forwarded-For` and `X-Forwarded-Proto` are trusted only from
+  `TRUSTED_PROXY_IPS`. Authenticated password rotation is available at
+  `POST /api/auth/change-password`; it requires the current password and a
+  new password of at least 12 characters. Rate-limit state remains
+  process-local; use a shared gateway limiter for multi-worker or distributed
+  deployments.
+- Production startup rejects non-loopback binds unless a trusted TLS proxy IP
+  is configured or `ALLOW_UNENCRYPTED_PUBLIC_BIND=true` is explicitly set.
+  HSTS is added only for direct HTTPS requests or verified proxy HTTPS.
 - Executive-only endpoints and the global event stream require executive
   authorization.
 - Review the remaining open deployment, retention, TLS, multi-worker, and

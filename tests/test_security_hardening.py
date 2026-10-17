@@ -6,7 +6,8 @@ from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 
-from engine.auth.security import make_gatekeeper_approval
+from engine.auth.security import LoginThrottle, hash_pw, make_gatekeeper_approval, verify_pw
+from engine.auth.users import User, UserStore, validate_password_strength
 from engine.config import cfg, validate_startup_config
 from engine.llm.provider import DataEgressBlocked, LLM, scrub_outbound
 from engine.mcp.base import Tool, ToolRegistry, ToolResult
@@ -238,7 +239,8 @@ class SecurityHardeningTests(unittest.TestCase):
     def test_login_rate_limit_and_security_response_headers(self):
         import engine.main as main
 
-        main._login_attempts.clear()
+        main.login_throttle = LoginThrottle(limit=main._LOGIN_LIMIT,
+                                            window_s=main._LOGIN_WINDOW_S)
         client = TestClient(main.app)
         with patch("engine.main.users.authenticate", return_value=None):
             responses = [client.post("/api/login", json={
@@ -249,6 +251,260 @@ class SecurityHardeningTests(unittest.TestCase):
         self.assertEqual(responses[0].headers["X-Content-Type-Options"], "nosniff")
         self.assertEqual(responses[0].headers["X-Frame-Options"], "DENY")
         self.assertEqual(responses[0].headers["Referrer-Policy"], "no-referrer")
+
+    def test_account_lockout_survives_client_ip_rotation(self):
+        import engine.main as main
+
+        main.login_throttle = LoginThrottle(limit=main._LOGIN_LIMIT,
+                                            window_s=main._LOGIN_WINDOW_S)
+        with patch("engine.main.users.authenticate", return_value=None):
+            client = TestClient(main.app)
+            addresses = [f"198.51.100.{index + 1}" for index in range(main._LOGIN_LIMIT)]
+            addresses.append("203.0.113.88")
+            with patch("engine.main._client_ip", side_effect=addresses):
+                for _ in range(main._LOGIN_LIMIT):
+                    response = client.post("/api/login", json={
+                        "email": "  STAFF@EXAMPLE.TEST ", "password": "bad"})
+                    self.assertEqual(response.status_code, 401)
+                locked = client.post("/api/login", json={
+                    "email": "staff@example.test", "password": "bad"})
+        self.assertEqual(locked.status_code, 429)
+
+    def test_forwarded_headers_are_trusted_only_from_allowlisted_proxy(self):
+        import engine.main as main
+        from starlette.requests import Request
+
+        request = Request({
+            "type": "http", "http_version": "1.1", "method": "GET", "scheme": "http",
+            "path": "/", "raw_path": b"/", "query_string": b"", "headers": [
+                (b"x-forwarded-for", b"203.0.113.7"),
+                (b"x-forwarded-proto", b"https")],
+            "client": ("127.0.0.1", 12345), "server": ("test", 80)})
+        with patch.object(cfg, "TRUSTED_PROXY_IPS", ()):
+            self.assertEqual(main._client_ip(request), "127.0.0.1")
+            self.assertNotIn("Strict-Transport-Security",
+                             main._security_headers(request))
+        with patch.object(cfg, "TRUSTED_PROXY_IPS", ("127.0.0.1",)):
+            self.assertEqual(main._client_ip(request), "203.0.113.7")
+            self.assertEqual(
+                main._security_headers(request)["Strict-Transport-Security"],
+                "max-age=31536000; includeSubDomains")
+        client = TestClient(main.app)
+        with patch("engine.main._is_trusted_proxy", return_value=True):
+            response = client.get("/openapi.json",
+                                  headers={"X-Forwarded-Proto": "https"})
+        self.assertEqual(
+            response.headers["Strict-Transport-Security"],
+            "max-age=31536000; includeSubDomains")
+
+    def test_authenticated_password_change_and_strength_validation(self):
+        import engine.main as main
+
+        main.login_throttle = LoginThrottle(limit=main._LOGIN_LIMIT,
+                                            window_s=main._LOGIN_WINDOW_S)
+        client = TestClient(main.app)
+        principal = {"sub": "staff@example.test", "role": "Software Engineer", "tier": 1}
+        with patch("engine.main.decode_token", return_value=principal), \
+                patch.object(main.users, "change_password") as change, \
+                patch.object(main.bus, "emit", new=AsyncMock()) as audit:
+            response = client.post("/api/auth/change-password",
+                                   headers={"Authorization": "Bearer test"},
+                                   json={"current_password": "old-password",
+                                         "new_password": "a-strong-new-password"})
+            self.assertEqual(response.status_code, 200)
+            change.assert_called_once_with("staff@example.test", "old-password",
+                                           "a-strong-new-password")
+            self.assertEqual(audit.await_args.args[2], "password changed")
+            self.assertNotIn("old-password", str(audit.await_args))
+            self.assertNotIn("a-strong-new-password", str(audit.await_args))
+            change.reset_mock()
+            change.side_effect = ValueError("password must be at least 12 characters")
+            weak = client.post("/api/auth/change-password",
+                               headers={"Authorization": "Bearer test"},
+                               json={"current_password": "old-password",
+                                     "new_password": "short"})
+        self.assertEqual(weak.status_code, 400)
+        change.assert_called_once()
+        with self.assertRaisesRegex(ValueError, "at least 12"):
+            validate_password_strength("short")
+        for placeholder in ("0000", "changeme", "finesse-ceo-2026"):
+            with self.subTest(placeholder=placeholder):
+                with self.assertRaisesRegex(ValueError, "placeholder|12 characters"):
+                    validate_password_strength(placeholder)
+
+    def test_password_rotation_updates_only_account_hash(self):
+        from tempfile import TemporaryDirectory
+
+        store = UserStore.__new__(UserStore)
+        user = User(email="staff@example.test", name="Staff", role="Software Engineer",
+                    pw_hash=hash_pw("old-password-value"))
+        store._users = {user.email: user}
+        with TemporaryDirectory() as tmp, patch("engine.auth.users._DB",
+                                                  Path(tmp) / "users.json"):
+            store.change_password(user.email, "old-password-value",
+                                  "new-password-value")
+            self.assertNotEqual(user.pw_hash, "")
+            self.assertTrue(verify_pw("new-password-value", user.pw_hash))
+            self.assertFalse(verify_pw("old-password-value", user.pw_hash))
+
+    def test_embedding_egress_scrubs_and_sensitive_text_uses_offline_backend(self):
+        from engine.rag.embeddings import Embedder
+
+        secret = "nvapi-" + "C" * 24
+        email = "analyst" + "@" + "example.test"
+        client = SimpleNamespace(embeddings=SimpleNamespace(
+            create=AsyncMock(return_value=SimpleNamespace(
+                data=[SimpleNamespace(embedding=[0.1, 0.2])]))))
+        embedder = Embedder.__new__(Embedder)
+        embedder.backend = "nim"
+        with patch.object(cfg, "REDACT_PII_ON_EXTERNAL_LLM", True):
+            vectors = asyncio.run(embedder._embed_nim(
+                [f"{secret} {email} +1 (212) 555-0199"], client=client))
+        outbound = client.embeddings.create.await_args.kwargs["input"][0]
+        self.assertNotIn(secret, outbound)
+        self.assertNotIn(email, outbound)
+        self.assertNotIn("555-0199", outbound)
+        self.assertEqual(vectors, [[0.1, 0.2]])
+
+        embedder._dim = 1024
+        offline = [[0.0] * 1024]
+        with patch.object(cfg, "ALLOW_CONFIDENTIAL_EXTERNAL_EGRESS", False), \
+                patch.object(embedder, "_embed_hash", return_value=offline) as local, \
+                patch.object(embedder, "_embed_nim", new=AsyncMock()) as hosted:
+            result = asyncio.run(embedder.embed(
+                ["restricted vault note"], sensitivity="restricted"))
+        self.assertEqual(result, offline)
+        local.assert_called_once()
+        hosted.assert_not_awaited()
+
+    def test_vector_upsert_passes_chunk_sensitivity_to_embedder(self):
+        from engine.rag.store import _MemoryBackend
+
+        vector_store = VectorStore()
+        vector_store._ready = True
+        vector_store._mem = _MemoryBackend()
+        async def fake_embed(texts, *, sensitivity):
+            return [[float(index + 1)] for index, _ in enumerate(texts)]
+        with patch("engine.rag.store.embedder.embed", new=AsyncMock(side_effect=fake_embed)) as embed:
+            asyncio.run(vector_store.upsert(
+                ["public", "private"],
+                [{"lane": "general", "sensitivity": "public"},
+                 {"lane": "exec", "sensitivity": "confidential"}]))
+        self.assertEqual([call.kwargs["sensitivity"] for call in embed.await_args_list],
+                         ["public", "confidential"])
+
+    def test_hosted_tts_scrubs_egress_and_blocks_confidential_data(self):
+        import engine.main as main
+        from engine.voice_tts import synth
+
+        class FakeClient:
+            def __init__(self):
+                self.post = AsyncMock(return_value=SimpleNamespace(
+                    status_code=200, content=b"audio"))
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return None
+
+        secret = "gsk_" + "D" * 24
+        email = "person" + "@" + "example.test"
+        fake_client = FakeClient()
+        with patch("engine.voice_tts.provider", return_value="openai"), \
+                patch("httpx.AsyncClient", return_value=fake_client), \
+                patch.object(cfg, "REDACT_PII_ON_EXTERNAL_LLM", True):
+            output = asyncio.run(synth(
+                f"{secret} {email} +1 (212) 555-0199", sensitivity="internal"))
+        self.assertEqual(output, (b"audio", "audio/mpeg"))
+        outbound = fake_client.post.await_args.kwargs["json"]["input"]
+        self.assertNotIn(secret, outbound)
+        self.assertNotIn(email, outbound)
+        self.assertNotIn("555-0199", outbound)
+        fake_client.post.reset_mock()
+        with patch("engine.voice_tts.provider", return_value="openai"), \
+                patch("httpx.AsyncClient", return_value=fake_client), \
+                patch.object(cfg, "ALLOW_CONFIDENTIAL_EXTERNAL_EGRESS", False):
+            with self.assertRaises(DataEgressBlocked):
+                asyncio.run(synth("confidential note", sensitivity="confidential"))
+            self.assertEqual(main.TTSIn(text="unclassified").sensitivity, "confidential")
+        fake_client.post.assert_not_awaited()
+        with patch("engine.voice_tts.synth", new=AsyncMock(return_value=None)) as synth_call:
+            asyncio.run(main.tts_route(
+                main.TTSIn(text="classified speech", sensitivity="restricted"),
+                user={"sub": "staff@example.test"}))
+        self.assertEqual(synth_call.await_args.kwargs["sensitivity"], "restricted")
+
+    def test_voice_response_propagates_retrieved_sensitivity_to_tts_client(self):
+        import engine.main as main
+        from engine.jarvis_brain import _chat
+
+        details = {"text": "confidential retrieved context",
+                   "sensitivity": "confidential", "tainted": False}
+        with patch("engine.rag.retriever.retriever.context_details",
+                   new=AsyncMock(return_value=details)), \
+                patch("engine.llm.llm.jarvis_say",
+                      new=AsyncMock(return_value="private answer")) as complete:
+            speech, sensitivity = asyncio.run(_chat(
+                "question", "", "CEO", "ceo@example.test", "internal"))
+        self.assertEqual(speech, "private answer")
+        self.assertEqual(sensitivity, "confidential")
+        self.assertEqual(complete.await_args.kwargs["sensitivity"], "confidential")
+
+        main.login_throttle = LoginThrottle(limit=main._LOGIN_LIMIT,
+                                            window_s=main._LOGIN_WINDOW_S)
+        with patch("engine.jarvis_brain.route", new=AsyncMock(return_value={
+                "speech": "private answer", "sensitivity": "confidential"})), \
+                patch.object(main.users, "bump"):
+            response = asyncio.run(main.voice_route(
+                main.VoiceIn(text="question"), user={
+                    "sub": "ceo@example.test", "role": "CEO", "tier": 4}))
+        self.assertEqual(response["sensitivity"], "confidential")
+
+    def test_store_audits_and_purges_only_legacy_vectors(self):
+        from engine.rag.store import _MemoryBackend
+
+        vector_store = VectorStore()
+        vector_store._ready = True
+        vector_store._mem = _MemoryBackend()
+        vector_store._mem.upsert(
+            ["legacy", "valid", "invalid-sensitivity"], [[1.0], [1.0], [1.0]],
+            [{}, {"lane": "coding", "sensitivity": "internal"},
+             {"lane": "coding", "sensitivity": "unknown"}])
+        self.assertEqual(asyncio.run(vector_store.audit_legacy_points()),
+                         ["legacy", "invalid-sensitivity"])
+        self.assertEqual(asyncio.run(vector_store.purge_legacy_points()), 2)
+        self.assertEqual(asyncio.run(vector_store.audit_legacy_points()), [])
+        self.assertEqual(asyncio.run(vector_store.count()), 1)
+
+    def test_index_cli_exposes_non_mutating_audit_flag(self):
+        from scripts import index_vault
+
+        self.assertTrue(index_vault._arguments(["--audit-only"]).audit_only)
+        self.assertTrue(index_vault._arguments(["--purge-legacy"]).purge_legacy)
+        with patch.object(index_vault.store, "init", new=AsyncMock()), \
+                patch.object(index_vault.store, "audit_legacy_points",
+                             new=AsyncMock(return_value=["legacy"])) as audit, \
+                patch.object(index_vault.store, "purge_legacy_points",
+                             new=AsyncMock()) as purge:
+            asyncio.run(index_vault.main(["--audit-only"]))
+        audit.assert_awaited_once()
+        purge.assert_not_awaited()
+
+    def test_production_public_bind_requires_proxy_or_explicit_override(self):
+        from engine.config import validate_runtime_security
+
+        config = SimpleNamespace(
+            ENV="production", JWT_SECRET="j" * 40, CEO_PASSWORD="p" * 16,
+            HOST="0.0.0.0", TRUSTED_PROXY_IPS=(),
+            ALLOW_UNENCRYPTED_PUBLIC_BIND=False)
+        with self.assertRaisesRegex(RuntimeError, "trusted TLS reverse proxy"):
+            validate_runtime_security(config)
+        config.TRUSTED_PROXY_IPS = ("127.0.0.1",)
+        validate_runtime_security(config)
+        config.TRUSTED_PROXY_IPS = ()
+        config.ALLOW_UNENCRYPTED_PUBLIC_BIND = True
+        validate_runtime_security(config)
 
 
 if __name__ == "__main__":

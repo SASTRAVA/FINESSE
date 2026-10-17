@@ -84,21 +84,23 @@ async def _classify(text: str, sensitivity: str = "internal") -> dict:
 
 
 async def _chat(text: str, history_txt: str, role: str, user_id: str,
-                sensitivity: str = "internal") -> str:
+                sensitivity: str = "internal") -> tuple[str, str]:
     from .llm import llm
     from .rag import retriever
     details = await retriever.context_details(text, role=role, user_id=user_id, limit=4)
     order = ("public", "internal", "confidential", "restricted")
     egress_sensitivity = max((sensitivity, details["sensitivity"]), key=order.index)
-    return await llm.jarvis_say(
+    answer = await llm.jarvis_say(
         JARVIS_SYS,
         f"Conversation so far:\n{wrap_untrusted_content(history_txt, 'conversation_history')}\n\n"
         f"Sir just said: \"{text}\"\n\n"
         f"Brain context:\n{details['text']}\n\nReply as JARVIS.",
         temperature=0.5, max_tokens=160, sensitivity=egress_sensitivity)
+    return answer, egress_sensitivity
 
 
-async def _research(topic: str, user: dict, sensitivity: str = "internal") -> str:
+async def _research(topic: str, user: dict,
+                    sensitivity: str = "internal") -> tuple[str, str]:
     from .llm import llm
     from .mcp import mcp
     from .rag import retriever
@@ -119,7 +121,7 @@ async def _research(topic: str, user: dict, sensitivity: str = "internal") -> st
         f"brief is saved to the vault.", temperature=0.4, max_tokens=240,
         sensitivity=egress_sensitivity)
     await asyncio.to_thread(_save_research, topic, web_txt, brain, briefing)
-    return briefing
+    return briefing, egress_sensitivity
 
 
 def _save_research(topic: str, web_txt: str, brain: str, briefing: str) -> None:
@@ -205,19 +207,22 @@ async def route(text: str, user: dict, history_txt: str = "",
     action, topic, ack = intent.get("action", "chat"), intent.get("topic") or text, intent.get("ack", "")
 
     if action == "chat":
-        return {"speech": await _chat(text, history_txt, user["role"], user["sub"], sensitivity),
-                "action": "chat", "launched": False}
+        speech, result_sensitivity = await _chat(
+            text, history_txt, user["role"], user["sub"], sensitivity)
+        return {"speech": speech, "action": "chat", "launched": False,
+                "sensitivity": result_sensitivity}
 
     if action == "research":
-        return {"speech": await _research(topic, user, sensitivity),
-                "action": "research", "launched": False}
+        speech, result_sensitivity = await _research(topic, user, sensitivity)
+        return {"speech": speech, "action": "research", "launched": False,
+                "sensitivity": result_sensitivity}
 
     if action == "build":
         asyncio.create_task(orchestrator.run_directive(
             text, user_email=user["sub"], user_role=user["role"],
             sensitivity=sensitivity))
         return {"speech": ack or "Dispatching the team on that now, sir — I'll surface it on the dashboard.",
-                "action": "build", "launched": True}
+                "action": "build", "launched": True, "sensitivity": sensitivity}
 
     if action == "create_agent":
         if not can(user["role"], "spawn:any"):
@@ -227,7 +232,8 @@ async def route(text: str, user: dict, history_txt: str = "",
         spec = registry.register_from_injection(
             title=clean, lane=_guess_lane(clean), mandate=f"Handle everything relating to: {clean}.")
         return {"speech": f"Consider it done, sir — the {spec.title} has just joined the orchestra.",
-                "action": "create_agent", "launched": False, "data": {"agent": spec.key}}
+                "action": "create_agent", "launched": False, "data": {"agent": spec.key},
+                "sensitivity": sensitivity}
 
     if action == "leadgen":
         if not can(user["role"], "spawn:bizdev"):
@@ -236,7 +242,7 @@ async def route(text: str, user: dict, history_txt: str = "",
         asyncio.create_task(generate_leads(icp=topic, location="", count=5, owner=user["sub"],
                                            sensitivity=sensitivity))
         return {"speech": f"Sourcing prospects around {topic} now, sir — they'll land in the CRM.",
-                "action": "leadgen", "launched": True}
+                "action": "leadgen", "launched": True, "sensitivity": sensitivity}
 
     if action == "security":
         if not (can(user["role"], "read:all") or role_of(user["role"]).lane == "security"):
@@ -244,17 +250,18 @@ async def route(text: str, user: dict, history_txt: str = "",
         from .security_watch import run_audit
         asyncio.create_task(run_audit(actor=user["sub"]))
         return {"speech": "Running a full security sweep now, sir; the report will be in the vault.",
-                "action": "security", "launched": True}
+                "action": "security", "launched": True, "sensitivity": sensitivity}
 
     if action == "harvest":
         if not can(user["role"], "spawn:any"):
             raise HTTPException(403, "skill harvesting is restricted to CEO/COO")
         asyncio.create_task(_harvest(topic))
         return {"speech": f"Scouring open source for {topic or 'new'} capabilities and upgrading myself, sir.",
-                "action": "harvest", "launched": True}
+                "action": "harvest", "launched": True, "sensitivity": sensitivity}
 
     if action == "status":
-        return {"speech": await _status(), "action": "status", "launched": False}
+        return {"speech": await _status(), "action": "status", "launched": False,
+                "sensitivity": sensitivity}
 
     if action == "innovate":
         from .hub_api import map_idea
@@ -264,17 +271,21 @@ async def route(text: str, user: dict, history_txt: str = "",
             raise
         except Exception as e:  # noqa: BLE001
             return {"speech": f"I couldn't map that idea, sir — {type(e).__name__}.",
-                    "action": "innovate", "launched": False}
+                    "action": "innovate", "launched": False, "sensitivity": sensitivity}
         im = d.get("idea_metrics") or {}
         n = len((d.get("step_map") or {}).get("steps") or [])
         return {"speech": f"Mapped it into {n} steps, sir — Innovation Index "
                 f"{im.get('composite')}, {im.get('band')}. It's in the Innovation Hub and the "
-                f"team is on it.", "action": "innovate", "launched": True, "data": d}
+                f"team is on it.", "action": "innovate", "launched": True, "data": d,
+                "sensitivity": d.get("sensitivity", sensitivity)}
 
     if action == "diagram":
         code = await make_diagram(topic, sensitivity=sensitivity)
         return {"speech": f"I've drafted a diagram of {topic}, sir — it's live in the Innovation Hub.",
-                "action": "diagram", "launched": False, "data": {"mermaid": code}}
+                "action": "diagram", "launched": False, "data": {"mermaid": code},
+                "sensitivity": sensitivity}
 
-    return {"speech": await _chat(text, history_txt, user["role"], user["sub"], sensitivity),
-            "action": "chat", "launched": False}
+    speech, result_sensitivity = await _chat(
+        text, history_txt, user["role"], user["sub"], sensitivity)
+    return {"speech": speech, "action": "chat", "launched": False,
+            "sensitivity": result_sensitivity}

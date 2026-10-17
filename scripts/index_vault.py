@@ -9,6 +9,7 @@ Run once after setup, and again whenever you add a lot of notes by hand:
 """
 from __future__ import annotations
 import asyncio
+import argparse
 import re
 from pathlib import Path
 
@@ -64,8 +65,26 @@ def _sensitivity_for(lane: str, rel: Path, metadata: dict[str, str] | None = Non
     return "internal"
 
 
-async def main():
+def _arguments(argv=None):
+    parser = argparse.ArgumentParser(description="Index the configured Markdown vault.")
+    options = parser.add_mutually_exclusive_group()
+    options.add_argument("--purge-legacy", action="store_true",
+                         help="delete vector points with missing/invalid lane or sensitivity")
+    options.add_argument("--audit-only", action="store_true",
+                         help="report the number of legacy points without changing data")
+    return parser.parse_args(argv)
+
+
+async def main(argv=None):
+    args = _arguments(argv)
     await store.init()
+    if args.audit_only:
+        legacy = await store.audit_legacy_points()
+        print(f"[index] audit complete: {len(legacy)} legacy vector points")
+        return
+    if args.purge_legacy:
+        removed = await store.purge_legacy_points()
+        print(f"[index] purged {removed} legacy vector points")
     files = [p for p in cfg.VAULT.rglob("*.md")
              if not any(s in p.parts for s in _SKIP)]
     print(f"[index] {len(files)} markdown files under {cfg.VAULT}")

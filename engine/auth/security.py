@@ -3,12 +3,67 @@ from __future__ import annotations
 import time
 import hashlib
 import json
+import threading
 from typing import Optional
 
 import jwt
 import bcrypt
 
 from ..config import cfg
+
+
+class LoginThrottle:
+    """Process-local failed-login limits shared by client IP and account."""
+
+    def __init__(self, limit: int = 10, window_s: int = 60):
+        self.limit = limit
+        self.window_s = window_s
+        self._by_ip: dict[str, list[float]] = {}
+        self._by_account: dict[str, list[float]] = {}
+        self._lock = threading.Lock()
+
+    @staticmethod
+    def normalize_account(account: str) -> str:
+        return account.strip().casefold()
+
+    def _prune(self, now: float) -> None:
+        for attempts in (self._by_ip, self._by_account):
+            expired = []
+            for key, stamps in attempts.items():
+                current = [stamp for stamp in stamps if now - stamp < self.window_s]
+                if current:
+                    attempts[key] = current
+                else:
+                    expired.append(key)
+            for key in expired:
+                del attempts[key]
+
+    def allowed(self, *, ip: str | None = None, account: str | None = None) -> bool:
+        now = time.monotonic()
+        normalized = self.normalize_account(account) if account else ""
+        with self._lock:
+            self._prune(now)
+            return ((not ip or len(self._by_ip.get(ip, ())) < self.limit)
+                    and (not normalized
+                         or len(self._by_account.get(normalized, ())) < self.limit))
+
+    def failed(self, *, ip: str | None = None, account: str | None = None) -> None:
+        now = time.monotonic()
+        normalized = self.normalize_account(account) if account else ""
+        with self._lock:
+            self._prune(now)
+            if ip:
+                self._by_ip.setdefault(ip, []).append(now)
+            if normalized:
+                self._by_account.setdefault(normalized, []).append(now)
+
+    def succeeded(self, *, ip: str | None = None, account: str | None = None) -> None:
+        normalized = self.normalize_account(account) if account else ""
+        with self._lock:
+            if ip:
+                self._by_ip.pop(ip, None)
+            if normalized:
+                self._by_account.pop(normalized, None)
 
 
 def _b(pw: str) -> bytes:

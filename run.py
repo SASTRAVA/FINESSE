@@ -13,9 +13,9 @@ import sys
 import asyncio
 
 
-def _index():
+def _index(argv=None):
     from scripts.index_vault import main as index_main
-    asyncio.run(index_main())
+    asyncio.run(index_main(argv))
 
 
 def _seed():
@@ -61,7 +61,7 @@ def _serve():
 
 if __name__ == "__main__":
     if "--index" in sys.argv:
-        _index()
+        _index([arg for arg in sys.argv[1:] if arg != "--index"])
     elif "--seed" in sys.argv:
         _seed()
     elif "--reweave" in sys.argv:

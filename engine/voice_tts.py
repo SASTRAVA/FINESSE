@@ -11,6 +11,7 @@ Returns mp3 bytes the /api/tts endpoint streams to the dashboard's <audio>.
 from __future__ import annotations
 
 from .config import cfg
+from .llm.provider import ensure_external_egress_allowed, scrub_outbound
 
 _OPENAI_URL = "https://api.openai.com/v1/audio/speech"
 _ELEVEN_URL = "https://api.elevenlabs.io/v1/text-to-speech/{vid}"
@@ -20,11 +21,13 @@ def provider() -> str:
     return cfg.voice_provider
 
 
-async def synth(text: str) -> tuple[bytes, str] | None:
+async def synth(text: str, *, sensitivity: str = "confidential") -> tuple[bytes, str] | None:
     """(mp3_bytes, mime) from the configured provider, or None to use the browser voice."""
+    ensure_external_egress_allowed(sensitivity, "TTS")
     text = (text or "").strip()[:4000]
     if not text:
         return None
+    text = scrub_outbound(text, redact_pii=cfg.REDACT_PII_ON_EXTERNAL_LLM)
     import httpx
     p = provider()
     try:

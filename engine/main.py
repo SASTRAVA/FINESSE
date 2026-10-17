@@ -20,7 +20,7 @@ Routes
 from __future__ import annotations
 import uuid
 import time
-import threading
+import ipaddress
 from pathlib import Path
 
 from fastapi import (FastAPI, Depends, HTTPException, UploadFile, File, Form, Request, WebSocket,
@@ -30,8 +30,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field
 
-from .config import cfg, validate_startup_config
+from .config import cfg, validate_runtime_security
 from .auth import users, make_token, decode_token, role_of, can, ROLES
+from .auth.security import LoginThrottle
 from .rag import store, ingest_text, ingest_file
 from .rag.embeddings import embedder
 from .llm import llm, turbo
@@ -51,8 +52,7 @@ _bearer = HTTPBearer(auto_error=False)
 _WEB = Path(__file__).parent / "web"
 _LOGIN_LIMIT = 10
 _LOGIN_WINDOW_S = 60
-_login_attempts: dict[tuple[str, str], list[float]] = {}
-_login_attempts_lock = threading.Lock()
+login_throttle = LoginThrottle(limit=_LOGIN_LIMIT, window_s=_LOGIN_WINDOW_S)
 
 
 @app.exception_handler(DataEgressBlocked)
@@ -63,28 +63,57 @@ async def confidential_egress_blocked(_request: Request, exc: DataEgressBlocked)
 @app.middleware("http")
 async def security_and_login_rate_limit(request, call_next):
     path = request.url.path
+    client_ip = _client_ip(request)
     if path in {"/api/login", "/hubapi/token"}:
-        now = time.monotonic()
-        ip = request.client.host if request.client else "unknown"
-        key = (ip, path)
-        with _login_attempts_lock:
-            attempts = [stamp for stamp in _login_attempts.get(key, [])
-                        if now - stamp < _LOGIN_WINDOW_S]
-            if len(attempts) >= _LOGIN_LIMIT:
-                _login_attempts[key] = attempts
-                response = JSONResponse({"detail": "too many login attempts"}, status_code=429)
-                response.headers.update(_security_headers())
-                return response
-            attempts.append(now)
-            _login_attempts[key] = attempts
+        if not login_throttle.allowed(ip=client_ip):
+            response = JSONResponse({"detail": "too many login attempts"}, status_code=429)
+            response.headers.update(_security_headers(request))
+            return response
     response = await call_next(request)
-    response.headers.update(_security_headers())
+    if path in {"/api/login", "/hubapi/token"}:
+        if response.status_code == 401:
+            login_throttle.failed(ip=client_ip)
+        elif response.status_code < 400:
+            login_throttle.succeeded(ip=client_ip)
+    response.headers.update(_security_headers(request))
     return response
 
 
-def _security_headers() -> dict[str, str]:
-    return {"X-Content-Type-Options": "nosniff", "X-Frame-Options": "DENY",
-            "Referrer-Policy": "no-referrer"}
+def _remote_ip(request: Request) -> str:
+    remote = request.client.host if request.client else "unknown"
+    try:
+        return str(ipaddress.ip_address(remote))
+    except ValueError:
+        return remote
+
+
+def _is_trusted_proxy(request: Request) -> bool:
+    return _remote_ip(request) in set(getattr(cfg, "TRUSTED_PROXY_IPS", ()))
+
+
+def _client_ip(request: Request) -> str:
+    remote = _remote_ip(request)
+    if _is_trusted_proxy(request):
+        trusted = set(getattr(cfg, "TRUSTED_PROXY_IPS", ()))
+        forwarded = request.headers.get("x-forwarded-for", "").split(",")
+        for hop in reversed(forwarded):
+            try:
+                address = str(ipaddress.ip_address(hop.strip()))
+            except ValueError:
+                return remote
+            if address not in trusted:
+                return address
+    return remote
+
+
+def _security_headers(request: Request | None = None) -> dict[str, str]:
+    headers = {"X-Content-Type-Options": "nosniff", "X-Frame-Options": "DENY",
+               "Referrer-Policy": "no-referrer"}
+    if request and (request.url.scheme == "https"
+                    or (_is_trusted_proxy(request)
+                        and request.headers.get("x-forwarded-proto", "").lower() == "https")):
+        headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return headers
 
 
 # ---------- auth dependency ----------
@@ -118,6 +147,11 @@ def require_tier(min_tier: int):
 class LoginIn(BaseModel):
     email: str = Field(min_length=3, max_length=320)
     password: str = Field(min_length=1, max_length=1024)
+
+
+class ChangePasswordIn(BaseModel):
+    current_password: str = Field(min_length=1, max_length=1024)
+    new_password: str = Field(min_length=1, max_length=1024)
 
 
 class NewUserIn(BaseModel):
@@ -190,7 +224,7 @@ class LeadIn(BaseModel):
 # ---------- lifecycle ----------
 @app.on_event("startup")
 async def _startup():
-    validate_startup_config()
+    validate_runtime_security()
     await store.init()
     # ensure every engine agent exists as an Obsidian note on boot
     try:
@@ -223,12 +257,28 @@ async def _shutdown():
 # ---------- auth ----------
 @app.post("/api/login")
 async def login(body: LoginIn):
+    account = login_throttle.normalize_account(body.email)
+    if not login_throttle.allowed(account=account):
+        raise HTTPException(429, "too many login attempts for this account")
     u = users.authenticate(body.email, body.password)
     if not u:
+        login_throttle.failed(account=account)
         raise HTTPException(401, "bad credentials")
+    login_throttle.succeeded(account=account)
     token = make_token(u.email, u.role, u.tier)
     await bus.emit("system", u.role, f"{u.name} logged in", lane=role_of(u.role).lane)
     return {"token": token, "user": u.public()}
+
+
+@app.post("/api/auth/change-password")
+async def change_password(body: ChangePasswordIn, user: dict = Depends(current_user)):
+    try:
+        users.change_password(user["sub"], body.current_password, body.new_password)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    await bus.emit("security", user.get("role", "unknown"), "password changed",
+                   user=user["sub"])
+    return {"changed": True}
 
 
 @app.get("/api/me")
@@ -370,7 +420,8 @@ async def voice_route(body: VoiceIn, user: dict = Depends(current_user)):
         _convo(user).clear()
         return {"speech": f"At your service, sir. All systems online — {len(registry.all())} "
                           f"agents standing by. What shall we build?",
-                "launched": False, "voice": cfg.voice_provider}
+                "launched": False, "voice": cfg.voice_provider,
+                "sensitivity": body.sensitivity}
     if not text:
         raise HTTPException(400, "no speech")
     hist = _convo(user)
@@ -382,18 +433,21 @@ async def voice_route(body: VoiceIn, user: dict = Depends(current_user)):
     hist.append(("JARVIS", result["speech"]))
     users.bump(user["sub"], "directives")
     return {"speech": result["speech"], "launched": result.get("launched", False),
-            "action": result.get("action", "chat"), "voice": cfg.voice_provider}
+            "action": result.get("action", "chat"), "voice": cfg.voice_provider,
+            "sensitivity": result.get("sensitivity", body.sensitivity)}
 
 
 class TTSIn(BaseModel):
     text: str
+    sensitivity: str = Field(default="confidential",
+                             pattern="^(public|internal|confidential|restricted)$")
 
 
 @app.post("/api/tts")
 async def tts_route(body: TTSIn, user: dict = Depends(current_user)):
-    """Natural JARVIS voice audio (OpenAI/ElevenLabs) when a key is set; 204 = browser fallback."""
+    """Natural JARVIS voice audio when configured; 204 = browser fallback."""
     from .voice_tts import synth
-    out = await synth(body.text)
+    out = await synth(body.text, sensitivity=body.sensitivity)
     if not out:
         return Response(status_code=204)
     audio, mime = out

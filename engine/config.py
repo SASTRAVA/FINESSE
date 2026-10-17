@@ -5,6 +5,7 @@ Karpathy rule: no magic — every knob is visible here.
 from __future__ import annotations
 import os
 import logging
+import ipaddress
 from pathlib import Path
 from functools import lru_cache
 from dotenv import load_dotenv
@@ -31,6 +32,20 @@ def _csv(name: str, default: str) -> tuple[str, ...]:
     return values
 
 
+def _ips(name: str) -> tuple[str, ...]:
+    values = tuple(value.strip() for value in os.environ.get(name, "").split(",")
+                   if value.strip())
+    try:
+        return tuple(str(ipaddress.ip_address(value)) for value in values)
+    except ValueError as exc:
+        raise ValueError(f"{name} must contain comma-separated IP addresses") from exc
+
+
+def _rooted_path(name: str, default: str) -> Path:
+    value = Path(_b(name, default))
+    return (value if value.is_absolute() else ROOT / value).resolve()
+
+
 _DEV_ORIGINS = "http://localhost:8000,http://127.0.0.1:8000"
 
 
@@ -47,8 +62,11 @@ class Config:
         "1", "true", "yes")
     ALLOW_CONFIDENTIAL_EXTERNAL_EGRESS = _b(
         "ALLOW_CONFIDENTIAL_EXTERNAL_EGRESS", "false").lower() in ("1", "true", "yes")
+    TRUSTED_PROXY_IPS = _ips("TRUSTED_PROXY_IPS")
+    ALLOW_UNENCRYPTED_PUBLIC_BIND = _b(
+        "ALLOW_UNENCRYPTED_PUBLIC_BIND", "false").lower() in ("1", "true", "yes")
     VAULT = (ROOT / _b("VAULT_PATH", "./vault")).resolve()
-    DATA = (ROOT / "data").resolve()
+    DATA = _rooted_path("FINESSE_DATA_DIR", "./data")
     UPLOADS = DATA / "uploads"
 
     # --- inference (NIM now, local later) ---
@@ -88,7 +106,7 @@ class Config:
     # --- vector db ---
     QDRANT_MODE = _b("QDRANT_MODE", "embedded")               # embedded | server
     # resolve to absolute under ROOT so the brain is found regardless of CWD
-    QDRANT_PATH = str((ROOT / _b("QDRANT_PATH", "./data/qdrant")).resolve())
+    QDRANT_PATH = str(_rooted_path("QDRANT_PATH", str(DATA / "qdrant")))
     QDRANT_URL = _b("QDRANT_URL")
     QDRANT_COLLECTION = _b("QDRANT_COLLECTION", "sastrava_brain")
 
@@ -174,7 +192,7 @@ class Config:
         return bool(self.LOCAL_LLM_BASE_URL)
 
 
-def validate_startup_config(config=None) -> None:
+def validate_runtime_security(config=None) -> None:
     """Fail closed in production; warn loudly in development when auth secrets are unsafe."""
     config = config or cfg
     environment = getattr(config, "ENV", "development")
@@ -194,12 +212,30 @@ def validate_startup_config(config=None) -> None:
         problems.append("JWT_SECRET must be a non-placeholder secret of at least 32 characters")
     if len(password) < 12 or is_placeholder(password):
         problems.append("CEO_PASSWORD must be a non-placeholder password of at least 12 characters")
+    host = str(getattr(config, "HOST", "127.0.0.1")).strip().lower()
+    loopback = host == "localhost"
+    if not loopback:
+        try:
+            loopback = ipaddress.ip_address(host).is_loopback
+        except ValueError:
+            loopback = False
+    trusted_proxies = getattr(config, "TRUSTED_PROXY_IPS", ())
+    if (environment == "production" and not loopback and not trusted_proxies
+            and not getattr(config, "ALLOW_UNENCRYPTED_PUBLIC_BIND", False)):
+        problems.append(
+            "non-loopback production HOST requires TRUSTED_PROXY_IPS for a trusted TLS "
+            "reverse proxy or ALLOW_UNENCRYPTED_PUBLIC_BIND=true as an explicit override")
     if not problems:
         return
     message = "Unsafe FINESSE authentication configuration: " + "; ".join(problems)
     if environment == "production":
         raise RuntimeError(message)
     logging.getLogger("finesse.security").critical("%s — development mode is unsafe", message)
+
+
+def validate_startup_config(config=None) -> None:
+    """Backward-compatible name retained for existing startup callers and tests."""
+    validate_runtime_security(config)
 
 
 @lru_cache
