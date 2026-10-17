@@ -126,12 +126,17 @@ a local LLM endpoint if data must stay on your machine.
   stub mode)
 - Internet access the first time the local embedding model is downloaded
 
+`requirements.txt` is the lean serverless dependency set. The local quick start
+uses `requirements-local.txt`, which adds FastEmbed for local CPU embeddings and
+the optional Uvicorn standard extras. Vercel uses the lightweight hash
+embedding backend to keep its function bundle within the platform size limit.
+
 ## Quick start (Windows PowerShell)
 
 ```powershell
 py -3.12 -m venv .venv
 .\.venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
+python -m pip install -r requirements-local.txt
 Copy-Item .env.example .env
 ```
 

@@ -86,7 +86,10 @@ class Config:
     # --- paths ---
     ROOT = ROOT
     IS_VERCEL = _IS_VERCEL
-    ENV = _b("FINESSE_ENV", _b("ENV", "development")).lower()
+    _VERCEL_ENV = _b("VERCEL_ENV").lower()
+    _DEFAULT_ENV = ("production" if IS_VERCEL and _VERCEL_ENV == "production"
+                    else "development")
+    ENV = (_b("FINESSE_ENV") or _b("ENV") or _DEFAULT_ENV).lower()
     HOST = _b("HOST", _b("APP_HOST", "127.0.0.1"))
     PORT = _i("PORT", _i("APP_PORT", 8600))
     APP_HOST = HOST

@@ -1,0 +1,5 @@
+-r requirements.txt
+
+# Optional local-only performance dependencies; omitted from Vercel bundles.
+fastembed==0.7.4
+uvicorn[standard]==0.34.0

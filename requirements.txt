@@ -5,22 +5,20 @@
 
 # --- Web / async core (handles 30+ concurrent users) ---
 fastapi==0.115.6
-uvicorn[standard]==0.34.0
+uvicorn==0.34.0
 python-multipart==0.0.20         # file uploads (the human-touch data gateway)
 websockets==14.1                 # live "Jarvis" event stream
 
 # --- Auth (role-based hierarchical login) ---
 pyjwt==2.10.1
-bcrypt==4.2.1
+bcrypt==5.0.0
 
 # --- LLM inference (NVIDIA NIM now; local vLLM/TensorRT-LLM later) ---
 openai==1.59.6                   # OpenAI-compatible client -> points at NIM base_url
 httpx==0.28.1
 
 # --- RAG: embeddings + vector store ---
-# fastembed ships ONNX-quantized (INT8) BGE/E5 models -> "turboquant" embeddings, CPU-fast, no GPU needed
-fastembed==0.5.1
-qdrant-client==1.12.2            # runs embedded (local) now, server-mode later
+qdrant-client==1.19.1            # runs embedded (local) now, server-mode later
 
 # --- Ingestion (pdf / text / docx / md) ---
 pypdf==5.1.0
@@ -28,14 +26,14 @@ python-docx==1.1.2
 openpyxl==3.1.5                  # read .xlsx/.xlsm spreadsheets fed via the data gateway
 
 # --- Utils ---
-pydantic==2.10.4
-pydantic-settings==2.7.1
-python-dotenv==1.0.1
+pydantic==2.14.1
+pydantic-settings==2.16.0
+python-dotenv==1.2.2
 tenacity==9.0.0                  # retry/backoff around free-tier rate limits
 redis==5.2.1                    # optional shared login-throttle backend
-cryptography==44.0.0            # tenant-bound provider credential encryption
-psycopg[binary]==3.2.4           # optional PostgreSQL RLS persistence backend
-numpy==2.2.1
+cryptography==50.0.2            # tenant-bound provider credential encryption
+psycopg[binary]==3.3.6           # optional PostgreSQL RLS persistence backend
+numpy==2.3.4
 
 # ------------------------------------------------------------
 # OPTIONAL — only needed when you flip to LOCAL GPU inference:

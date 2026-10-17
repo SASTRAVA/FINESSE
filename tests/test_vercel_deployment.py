@@ -148,6 +148,7 @@ with TestClient(app) as client:
     assert response.status_code == 503, f"unexpected health status: {response.status_code}"
     payload = response.json()
     assert payload["ok"] is False, "health returned success without credentials"
+    assert payload["is_vercel"] is True, "Vercel status flag missing"
     assert payload["vercel_setup_required"] is True, "setup diagnostic flag missing"
     assert {
         "CEO_EMAIL", "CEO_PASSWORD", "JWT_SECRET", "KMS_MASTER_KEY"
@@ -173,7 +174,8 @@ with TestClient(app) as client:
         destinations = {item["source"]: item["destination"]
                         for item in config["rewrites"]}
         for source in ("/api/:path*", "/hubapi/:path*", "/dashboard", "/command",
-                       "/jarvis", "/voice", "/workspace/:path*", "/workspace", "/"):
+                       "/jarvis", "/voice", "/workspace/", "/workspace/:path*",
+                       "/workspace", "/"):
             self.assertEqual(destinations[source], "/api/index.py")
         header_names = {
             header["key"]
@@ -185,6 +187,8 @@ with TestClient(app) as client:
         }.issubset(header_names))
 
         ignore = (ROOT / ".vercelignore").read_text(encoding="utf-8").splitlines()
+        gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
+        self.assertIn(".vercel/", gitignore)
         for entry in (
             ".env", ".env.*", "!.env.example", ".venv/", "venv/", "data/",
             "vault/", "FINESSE VAULT/", "training/", "tests/",

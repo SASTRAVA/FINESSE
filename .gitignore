@@ -16,6 +16,7 @@ training/merged/
 .mcp.json
 .vscode/
 .claude/
+.vercel/
 HANDOFF.md
 ARCHITECTURE.md
 voice/friday.json

@@ -1159,9 +1159,13 @@ async def api_health():
     missing = vercel_missing_environment() if cfg.IS_VERCEL else []
     if missing:
         return JSONResponse(
-            {"ok": False, "vercel_setup_required": True, "missing_env": missing},
+            {"ok": False, "is_vercel": cfg.IS_VERCEL,
+             "vercel_setup_required": True, "missing_env": missing},
             status_code=503)
-    return JSONResponse({"ok": True, "vercel_setup_required": False, "missing_env": []})
+    return JSONResponse({
+        "ok": True, "is_vercel": cfg.IS_VERCEL,
+        "vercel_setup_required": False, "missing_env": [],
+    })
 
 
 @app.get("/api/v1/platform/runtime")

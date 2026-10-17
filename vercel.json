@@ -15,6 +15,7 @@
     { "source": "/command", "destination": "/api/index.py" },
     { "source": "/jarvis", "destination": "/api/index.py" },
     { "source": "/voice", "destination": "/api/index.py" },
+    { "source": "/workspace/", "destination": "/api/index.py" },
     { "source": "/workspace/:path*", "destination": "/api/index.py" },
     { "source": "/workspace", "destination": "/api/index.py" },
     { "source": "/innovation", "destination": "/api/index.py" },
