@@ -8,6 +8,8 @@ orchestrator, a FastAPI service, and browser dashboards.
 > load-tested for internet-facing or regulated production use. See
 > [PROJECT_REPORT.md](PROJECT_REPORT.md) for the architecture, data flows, and
 > prioritized findings.
+> See [DEPLOY_TO_VERCEL.md](DEPLOY_TO_VERCEL.md) for the deployment setup and
+> [docs/FINESSE_REQUIREMENTS.md](docs/FINESSE_REQUIREMENTS.md) for the PRD-to-code map.
 
 ## What it does
 

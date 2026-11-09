@@ -9,6 +9,9 @@ FINESSE VAULT/
 training/
 tests/
 frontend/node_modules/
+node_modules/
+.next/
+tmp/
 .git/
 __pycache__/
 *.pyc
