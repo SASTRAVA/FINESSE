@@ -28,9 +28,9 @@ __pycache__/
 .venv/
 venv/
 frontend/node_modules/
-/node_modules/
-/.next/
-/tmp/
 # os
 .DS_Store
 Thumbs.db
+/node_modules/
+/.next/
+/tmp/

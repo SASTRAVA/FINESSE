@@ -29,6 +29,6 @@ The GitHub repository lists supplied earlier are treated as an integration/disco
 
 ## Verification and known limits
 
-The repository contains unit and deployment checks under `tests/`; local execution requires the dependency and authentication configuration described in [README.md](../README.md). The environment used for this update has no linked Vercel project credentials. The live URL was inspected separately, but local changes cannot be published to it from this checkout until it is linked to the Vercel project or deployed through its authorized Git integration.
+The repository contains unit and deployment checks under `tests/`; local execution requires the dependency and authentication configuration described in [README.md](../README.md). The Vercel project `finesse` is connected to `SASTRAVA/FINESSE`, and `finesse-psi.vercel.app` is its production domain. This workspace copy has no local Git metadata or Vercel link; updates should be committed to a branch in the connected repository to create a Preview deployment. Review and promote through the repository's production branch flow.
 
 Passing the local suite and frontend build demonstrates only those checks. Review [PROJECT_REPORT.md](../PROJECT_REPORT.md), [SECURITY.md](../SECURITY.md), and [DEPLOY_TO_VERCEL.md](../DEPLOY_TO_VERCEL.md) for the current prototype limitations, deployment controls, and remaining production work.

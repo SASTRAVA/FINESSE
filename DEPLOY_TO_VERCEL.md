@@ -17,7 +17,7 @@ vercel deploy          # Preview deployment
 vercel deploy --prod   # Production deployment
 ```
 
-The current workspace checkout has no `.vercel` project link, Git remote, or Vercel credentials, so it cannot publish a deployment to the live project from this environment. The public FINESSE URL was checked separately and is serving the FINESSE application and API.
+The Vercel project `finesse` is connected to `SASTRAVA/FINESSE` and owns `finesse-psi.vercel.app`. This workspace copy has no local `.git` remote or `.vercel` link. Push changes to a branch in the connected GitHub repository to trigger a Preview deployment; use the reviewed production branch flow for live releases.
 
 ## Verify a deployment
 

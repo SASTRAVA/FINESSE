@@ -9,9 +9,6 @@ FINESSE VAULT/
 training/
 tests/
 frontend/node_modules/
-node_modules/
-.next/
-tmp/
 .git/
 __pycache__/
 *.pyc
@@ -19,3 +16,6 @@ voice/friday.json
 .mcp.json
 HANDOFF.md
 ARCHITECTURE.md
+node_modules/
+.next/
+tmp/
