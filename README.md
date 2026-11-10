@@ -8,6 +8,10 @@ orchestrator, a FastAPI service, and browser dashboards.
 > load-tested for internet-facing or regulated production use. See
 > [PROJECT_REPORT.md](PROJECT_REPORT.md) for the architecture, data flows, and
 > prioritized findings.
+> See [DEPLOY_TO_VERCEL.md](DEPLOY_TO_VERCEL.md) for the deployment setup and
+> [docs/FINESSE_REQUIREMENTS.md](docs/FINESSE_REQUIREMENTS.md) for the PRD-to-code map.
+> The implementation-aligned API contract is in [PRD.md](PRD.md). See
+> [DEPLOY_TO_VERCEL.md](DEPLOY_TO_VERCEL.md) for Vercel settings and release checks.
 
 ## What it does
 
@@ -41,12 +45,16 @@ audit, and event-stream routes remain restricted to the default tenant rather
 than returning cross-tenant data.
 
 The conjunction engine selects review-only workflow plans and explicitly
-reports that it performed no external side effects. `engine/db/storage.py` provides tenant-keyed SQLite JSON persistence by
-default. When `DATABASE_URL` uses PostgreSQL, it stores JSONB records and sets
-`app.current_tenant_id` transaction-locally on every operation; PostgreSQL RLS
-policies are installed on the tenant tables. `REDIS_URL` enables shared
-account/IP login throttling. Legacy session, account, audit, and runtime state
-is still partly file-backed or process-local.
+reports that it performed no external side effects. `engine/db/storage.py`
+provides tenant-keyed SQLite JSON persistence in local and test environments.
+With PostgreSQL 16+, startup applies pending migrations, checks that the app
+role cannot bypass RLS, and verifies all 24 tenant tables have forced RLS
+policies. `ENVIRONMENT=production` refuses SQLite and `/tmp` fallback.
+`REDIS_URL` enables shared login throttling, atomic Gatekeeper nonces, and
+event-stream fan-out. Remote Qdrant uses `QDRANT_URL` and optional
+`QDRANT_API_KEY`; production does not silently fall back to in-memory vectors
+when the configured cluster is unavailable. Some session, account, audit,
+and runtime state remains file-backed or process-local.
 
 Sales lead generation uses deterministic synthetic records while
 `SALES_DRY_RUN=true` (the default). Email and voice adapters, enrichment, and
@@ -168,8 +176,9 @@ Edit `.env` locally:
    `SALES_DRY_RUN=true` keeps legacy and enterprise lead generation on synthetic
    records. Leave `SALES_LIVE_OUTREACH_ENABLED=false`; enabling it does not
    configure a delivery provider, but it is reserved for explicitly reviewed
-   future adapters. The optional `REDIS_URL` enables shared login-throttle state;
-   without Redis, throttling is process-local.
+   future adapters. Configure `REDIS_URL` for shared login-throttle, Gatekeeper,
+   and event-stream state across workers; without Redis, local/test mode is
+   process-local.
 
 Requests and ingestion endpoints that accept data can include a `sensitivity`
 value (`public`, `internal`, `confidential`, or `restricted`); omitted values
@@ -361,7 +370,9 @@ local testing, not production accounts.
 | `engine/auth/` | JWTs, password hashing, role and permission definitions |
 | `engine/agents/` | Agent prompts, registry, execution |
 | `engine/orchestra/` | Planning, concurrent agent runs, synthesis, event bus, memory |
-| `engine/db/storage.py` | Tenant-keyed SQLite JSON records and transaction helpers |
+| `engine/db/storage.py` | Tenant-keyed SQLite/PostgreSQL JSON records and transaction helpers |
+| `engine/db/migrations.py` | Startup migration ledger and PostgreSQL role/RLS verification |
+| `engine/telemetry.py` | Optional OTLP tracing for HTTP, conjunction, and job spans |
 | `engine/db/tenant_secrets.py` | Per-tenant AES-GCM encrypted provider credentials |
 | `engine/sales/providers.py` | Opt-in email, voice, enrichment, calendar, and webhook adapters |
 | `engine/orchestra/langgraph_conjunction.py` | Deterministic review-only workflow planning |
@@ -405,9 +416,8 @@ local testing, not production accounts.
   account. `X-Forwarded-For` and `X-Forwarded-Proto` are trusted only from
   `TRUSTED_PROXY_IPS`. Authenticated password rotation is available at
   `POST /api/auth/change-password`; it requires the current password and a
-  new password of at least 12 characters. Rate-limit state remains
-  process-local; use a shared gateway limiter for multi-worker or distributed
-  deployments.
+  new password of at least 12 characters. Rate-limit state is process-local
+  only when `REDIS_URL` is unset; configure Redis for multi-worker deployments.
 - Production startup rejects non-loopback binds unless a trusted TLS proxy IP
   is configured or `ALLOW_UNENCRYPTED_PUBLIC_BIND=true` is explicitly set.
   HSTS is added only for direct HTTPS requests or verified proxy HTTPS.
@@ -417,6 +427,26 @@ local testing, not production accounts.
   evaluation concerns in [PROJECT_REPORT.md](PROJECT_REPORT.md) before
   production use. Configure sensitivity correctly when ingesting content; do
   not downgrade confidential data to make hosted inference available.
+
+## Production readiness and verification
+
+The implementation-aligned product/API contract is in [PRD.md](PRD.md).
+Deployment variables, GitHub-to-Vercel setup, migration requirements and smoke
+checks are documented in [DEPLOY_TO_VERCEL.md](DEPLOY_TO_VERCEL.md). Production
+requires provisioned PostgreSQL 16, Redis 7 and a reachable Qdrant service;
+local success does not provision or verify those external services.
+
+Run the automated checks with:
+
+```bash
+python -m pytest tests/ -v
+python finesse_e2e_production_tests.py
+cd frontend && npm ci && npm run build
+```
+
+CI also runs Ruff, focused mypy checks, `pip-audit`, and Trivy. OpenTelemetry is
+optional; install `requirements-observability.txt` and set `OTEL_ENABLED=true`
+plus `OTEL_EXPORTER_OTLP_ENDPOINT` to export spans.
 
 ## License
 

@@ -31,3 +31,6 @@ frontend/node_modules/
 # os
 .DS_Store
 Thumbs.db
+/node_modules/
+/.next/
+/tmp/

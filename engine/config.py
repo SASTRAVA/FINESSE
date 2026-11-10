@@ -89,7 +89,7 @@ class Config:
     _VERCEL_ENV = _b("VERCEL_ENV").lower()
     _DEFAULT_ENV = ("production" if IS_VERCEL and _VERCEL_ENV == "production"
                     else "development")
-    ENV = (_b("FINESSE_ENV") or _b("ENV") or _DEFAULT_ENV).lower()
+    ENV = (_b("FINESSE_ENV") or _b("ENVIRONMENT") or _b("ENV") or _DEFAULT_ENV).lower()
     HOST = _b("HOST", _b("APP_HOST", "127.0.0.1"))
     PORT = _i("PORT", _i("APP_PORT", 8600))
     APP_HOST = HOST
@@ -104,7 +104,11 @@ class Config:
         "ALLOW_UNENCRYPTED_PUBLIC_BIND", "false").lower() in ("1", "true", "yes")
     REDIS_URL = _b("REDIS_URL")
     DATABASE_URL = _b("DATABASE_URL")
-    KMS_MASTER_KEY = _b("KMS_MASTER_KEY")
+    KMS_MASTER_KEY = _b("KMS_MASTER_KEY") or _b("MASTER_KEY")
+    KMS_KEY_ID = _b("KMS_KEY_ID", "default-v1")
+    KMS_KEYRING = _b("KMS_KEYRING")
+    OTEL_ENABLED = _b("OTEL_ENABLED", "false").lower() in ("1", "true", "yes")
+    OTEL_EXPORTER_OTLP_ENDPOINT = _b("OTEL_EXPORTER_OTLP_ENDPOINT")
     SALES_DRY_RUN = _b("SALES_DRY_RUN", "true").lower() in ("1", "true", "yes")
     SALES_LIVE_OUTREACH_ENABLED = _b(
         "SALES_LIVE_OUTREACH_ENABLED", "false").lower() in ("1", "true", "yes")
@@ -177,13 +181,17 @@ class Config:
     # resolve to absolute under ROOT so the brain is found regardless of CWD
     QDRANT_PATH = str(_rooted_path("QDRANT_PATH", str(DATA_DIR / "qdrant")))
     QDRANT_URL = _b("QDRANT_URL")
+    QDRANT_API_KEY = _b("QDRANT_API_KEY")
     QDRANT_COLLECTION = _b("QDRANT_COLLECTION", "sastrava_brain")
 
     # --- auth ---
     JWT_SECRET = _b("JWT_SECRET")
     JWT_EXPIRY_HOURS = _i("JWT_EXPIRY_HOURS", 12)
-    CEO_EMAIL = _b("CEO_EMAIL", "ceo@sastrava.ai")
-    CEO_PASSWORD = _b("CEO_PASSWORD")
+    ACCESS_TOKEN_EXPIRE_MINUTES = _i(
+        "ACCESS_TOKEN_EXPIRE_MINUTES", JWT_EXPIRY_HOURS * 60)
+    JWT_ALGORITHM = _b("JWT_ALGORITHM", "HS256").upper()
+    CEO_EMAIL = _b("CEO_EMAIL") or _b("CEO_USERNAME", "ceo@sastrava.ai")
+    CEO_PASSWORD = _b("CEO_PASSWORD") or _b("CEO_LOGIN_PASSWORD")
 
     # --- obsidian ---
     OBSIDIAN_REST_URL = _b("OBSIDIAN_REST_URL")
@@ -278,6 +286,10 @@ def validate_runtime_security(config=None) -> None:
                 any(marker in lowered for marker in ("paste_", "generate_", "set_a_strong_")))
 
     problems = []
+    if getattr(config, "JWT_ALGORITHM", "HS256") != "HS256":
+        problems.append("JWT_ALGORITHM is restricted to HS256")
+    if not 1 <= int(getattr(config, "ACCESS_TOKEN_EXPIRE_MINUTES", 720)) <= 10080:
+        problems.append("ACCESS_TOKEN_EXPIRE_MINUTES must be between 1 and 10080")
     jwt_secret = str(getattr(config, "JWT_SECRET", "") or "").strip()
     password = str(getattr(config, "CEO_PASSWORD", "") or "").strip()
     if len(jwt_secret) < 32 or is_placeholder(jwt_secret):
@@ -317,6 +329,10 @@ def vercel_missing_environment(config=None) -> list[str]:
                        for marker in ("paste_", "generate_", "set_a_strong_")))
 
     missing = []
+    if getattr(config, "JWT_ALGORITHM", "HS256") != "HS256":
+        missing.append("JWT_ALGORITHM (HS256 required)")
+    if not 1 <= int(getattr(config, "ACCESS_TOKEN_EXPIRE_MINUTES", 720)) <= 10080:
+        missing.append("ACCESS_TOKEN_EXPIRE_MINUTES (must be 1..10080)")
     jwt_secret = str(getattr(config, "JWT_SECRET", "") or "").strip()
     if len(jwt_secret.encode("utf-8")) < 32 or unsafe(jwt_secret):
         missing.append("JWT_SECRET")
@@ -324,12 +340,20 @@ def vercel_missing_environment(config=None) -> list[str]:
     if (len(password) < 12 or len(password.encode("utf-8")) > 72
             or unsafe(password)):
         missing.append("CEO_PASSWORD")
-    email = os.environ.get("CEO_EMAIL", "").strip()
+    email = (os.environ.get("CEO_EMAIL") or os.environ.get("CEO_USERNAME", "")).strip()
     if not email:
         missing.append("CEO_EMAIL")
     master_key = str(getattr(config, "KMS_MASTER_KEY", "") or "").strip()
     if len(master_key.encode("utf-8")) < 32 or unsafe(master_key):
         missing.append("KMS_MASTER_KEY")
+    if (getattr(config, "ENV", "development") == "production"
+            and not str(getattr(config, "DATABASE_URL", "") or "").startswith(
+                ("postgres://", "postgresql://"))):
+        missing.append("DATABASE_URL (PostgreSQL required in production)")
+    if getattr(config, "ENV", "development") == "production":
+        for name in ("REDIS_URL", "QDRANT_URL"):
+            if not str(getattr(config, name, "") or "").strip():
+                missing.append(name + " (required for distributed production runtime)")
     return missing
 
 

@@ -47,12 +47,13 @@ class JobQueue:
 
     def enqueue(self, *, tenant_id: str, actor_sub: str, job_type: str,
                 payload: dict, max_retries: int = 3) -> Job:
+        from ..telemetry import span
         if not all((tenant_id, actor_sub, job_type)):
             raise ValueError("tenant_id, actor_sub, and job_type are required")
         if not 0 <= max_retries <= 3:
             raise ValueError("max_retries must be between 0 and 3")
         key = self.idempotency_key(tenant_id, actor_sub, job_type, payload)
-        with self._lock:
+        with span("finesse.job.enqueue", tenant_id=tenant_id, job_type=job_type), self._lock:
             for record in self.repository.list("jobs", tenant_id, limit=1000):
                 if record.get("idempotency_key") == key:
                     return Job(**record)

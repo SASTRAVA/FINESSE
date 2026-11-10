@@ -16,3 +16,6 @@ voice/friday.json
 .mcp.json
 HANDOFF.md
 ARCHITECTURE.md
+node_modules/
+.next/
+tmp/

@@ -162,20 +162,24 @@ def verify_pw(pw: str, hashed: str) -> bool:
 
 
 def make_token(email: str, role: str, tier: int, tenant_id: str = "default") -> str:
+    if cfg.JWT_ALGORITHM != "HS256":
+        raise RuntimeError("JWT_ALGORITHM must be HS256")
     if not isinstance(tenant_id, str) or not re.fullmatch(
             r"[a-z0-9][a-z0-9_-]{0,127}", tenant_id):
         raise ValueError("tenant_id must use lowercase letters, digits, hyphens, or underscores")
     now = int(time.time())
     payload = {
         "sub": email, "role": role, "tier": tier, "tenant_id": tenant_id,
-        "iat": now, "exp": now + cfg.JWT_EXPIRY_HOURS * 3600,
+        "iat": now, "exp": now + cfg.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
     }
-    return jwt.encode(payload, cfg.JWT_SECRET, algorithm="HS256")
+    return jwt.encode(payload, cfg.JWT_SECRET, algorithm=cfg.JWT_ALGORITHM)
 
 
 def decode_token(token: str) -> Optional[dict]:
     try:
-        return jwt.decode(token, cfg.JWT_SECRET, algorithms=["HS256"])
+        if cfg.JWT_ALGORITHM != "HS256":
+            return None
+        return jwt.decode(token, cfg.JWT_SECRET, algorithms=[cfg.JWT_ALGORITHM])
     except Exception:  # noqa: BLE001
         return None
 
@@ -189,11 +193,20 @@ def make_gatekeeper_approval(email: str, tool: str, args: dict, *,
     nonce = secrets.token_urlsafe(24)
     args_hash = hashlib.sha256(
         json.dumps(args, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-    storage.put("gatekeeper_approvals", tenant_id, nonce, {
+    record = {
         "nonce": nonce, "tenant_id": tenant_id, "requester_sub": email,
         "tool_name": tool, "args_sha256": args_hash, "status": "ISSUED",
         "expires_at": now + ttl_s,
-    })
+    }
+    if cfg.REDIS_URL:
+        import redis
+        client = redis.Redis.from_url(cfg.REDIS_URL, decode_responses=True)
+        created = client.set(_gatekeeper_redis_key(tenant_id, nonce),
+                             json.dumps(record, separators=(",", ":")), nx=True, ex=ttl_s)
+        if not created:
+            raise RuntimeError("could not reserve a unique Gatekeeper approval nonce")
+    else:
+        storage.put("gatekeeper_approvals", tenant_id, nonce, record)
     payload = {
         "sub": email, "purpose": "gatekeeper_approval", "tool": tool,
         "args_sha256": args_hash, "tenant_id": tenant_id,
@@ -218,7 +231,32 @@ def verify_gatekeeper_approval(token: str, email: str, tool: str, args: dict, *,
     nonce = payload.get("nonce")
     if not isinstance(nonce, str) or not nonce:
         return False
-    return storage.consume_once("gatekeeper_approvals", tenant_id, nonce, {
+    expected_record = {
         "nonce": nonce, "requester_sub": email, "tool_name": tool,
         "args_sha256": expected, "status": "CONSUMED",
-    })
+    }
+    if cfg.REDIS_URL:
+        import redis
+        client = redis.Redis.from_url(cfg.REDIS_URL, decode_responses=True)
+        key = _gatekeeper_redis_key(tenant_id, nonce)
+        consume_script = """
+        local raw = redis.call('GET', KEYS[1])
+        if not raw then return 0 end
+        local record = cjson.decode(raw)
+        if record.nonce ~= ARGV[1] or record.tenant_id ~= ARGV[2]
+          or record.requester_sub ~= ARGV[3] or record.tool_name ~= ARGV[4]
+          or record.args_sha256 ~= ARGV[5] or record.status ~= 'ISSUED' then return 0 end
+        redis.call('DEL', KEYS[1])
+        return 1
+        """
+        try:
+            return bool(client.eval(consume_script, 1, key, nonce, tenant_id,
+                                    email, tool, expected))
+        except redis.RedisError:
+            return False
+    return storage.consume_once("gatekeeper_approvals", tenant_id, nonce, expected_record)
+
+
+def _gatekeeper_redis_key(tenant_id: str, nonce: str) -> str:
+    tenant_digest = hashlib.sha256(tenant_id.encode("utf-8")).hexdigest()
+    return f"finesse:gatekeeper:{tenant_digest}:{nonce}"

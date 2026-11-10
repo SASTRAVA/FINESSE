@@ -1,7 +1,7 @@
 """Deterministic conjunction router with an optional LangGraph runtime adapter."""
 from __future__ import annotations
 
-from typing import Any, TypedDict
+from typing import TypedDict
 
 SUBGRAPHS = (
     "consulting_lsd_graph", "sales_automation_graph",
@@ -129,7 +129,11 @@ class LangGraphConjunctionEngine:
         self.backend = "langgraph"
 
     async def ainvoke(self, state: PlatformGraphState) -> PlatformGraphState:
-        return await self._graph.ainvoke(state)
+        from ..telemetry import span
+        with span("finesse.langgraph.conjunction",
+                  tenant_id=state.get("tenant_id", "default"),
+                  sensitivity=state.get("sensitivity", "internal")):
+            return await self._graph.ainvoke(state)
 
     async def run(self, *, directive: str, actor_sub: str, actor_role: str,
                   tenant_id: str = "default", allowed_lanes: list[str] | None = None,

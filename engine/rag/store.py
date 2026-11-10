@@ -7,7 +7,6 @@ lane and sensitivity metadata. The retriever enforces authorization before any
 stored text is returned to a caller.
 """
 from __future__ import annotations
-import asyncio
 import uuid
 import math
 from typing import List, Optional
@@ -72,9 +71,10 @@ class VectorStore:
             return
         try:
             from qdrant_client import AsyncQdrantClient
-            from qdrant_client.models import Distance, VectorParams
+            from qdrant_client.models import Distance, PayloadSchemaType, VectorParams
             if cfg.QDRANT_URL:
-                self._client = AsyncQdrantClient(url=cfg.QDRANT_URL)
+                self._client = AsyncQdrantClient(
+                    url=cfg.QDRANT_URL, api_key=cfg.QDRANT_API_KEY or None)
             else:
                 self._client = AsyncQdrantClient(path=cfg.QDRANT_PATH)
             existing = [c.name for c in (await self._client.get_collections()).collections]
@@ -83,7 +83,21 @@ class VectorStore:
                     self.name,
                     vectors_config=VectorParams(size=embedder.dim, distance=Distance.COSINE),
                 )
+            for field_name in ("tenant_id", "lane", "sensitivity"):
+                try:
+                    await self._client.create_payload_index(
+                        collection_name=self.name,
+                        field_name=field_name,
+                        field_schema=PayloadSchemaType.KEYWORD,
+                        wait=True,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    # Qdrant returns 409 when an identical index already exists.
+                    if getattr(exc, "status_code", None) != 409:
+                        raise
         except Exception as e:  # noqa: BLE001
+            if cfg.ENV == "production" and cfg.QDRANT_URL:
+                raise RuntimeError("configured production Qdrant is unavailable") from e
             print(f"[store] Qdrant unavailable ({e}); using in-memory backend")
             self._client = None
             self._mem = _MemoryBackend()

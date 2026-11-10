@@ -19,7 +19,6 @@ Routes
 """
 from __future__ import annotations
 import uuid
-import time
 import ipaddress
 import re
 import logging
@@ -513,7 +512,6 @@ def _convo(user: dict) -> deque:
 @app.post("/api/voice")
 async def voice_route(body: VoiceIn, user: dict = Depends(current_user)):
     """JARVIS voice brain: contextual spoken reply + dispatches the agent team when asked."""
-    from .rag import retriever
     text = (body.text or "").strip()
     if body.wake:
         _convo(user).clear()
@@ -1227,3 +1225,8 @@ if (_WORKSPACE_DIST / "index.html").exists():
     from fastapi.staticfiles import StaticFiles
     app.mount("/workspace", StaticFiles(
         directory=str(_WORKSPACE_DIST), html=True), name="workspace")
+
+
+# Install instrumentation after the application's routes and middleware are registered.
+from .telemetry import configure_telemetry  # noqa: E402
+configure_telemetry(app)
