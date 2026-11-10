@@ -27,8 +27,6 @@ from pydantic import BaseModel, Field
 from .config import cfg
 from .auth import decode_token
 from .auth.rbac import can, role_of
-from .prompt_guard import UNTRUSTED_DATA_POLICY
-
 router = APIRouter(prefix="/hubapi")
 _bearer = HTTPBearer(auto_error=False)
 
@@ -180,6 +178,13 @@ async def map_idea(stmt: str, user: dict, sensitivity: str = "internal") -> dict
     tenant_id = user.get("tenant_id", "default")
     payload["tenant_id"] = tenant_id
     _NODES[node_id] = payload
+    if cfg.REDIS_URL:
+        import redis.asyncio as redis
+        client = redis.Redis.from_url(cfg.REDIS_URL, decode_responses=True)
+        try:
+            await client.publish("finesse:gatekeeper:nodes:v1", json.dumps(payload))
+        finally:
+            await client.aclose()
 
     # feed the vault + the brain, then let the real agents act on it
     await asyncio.to_thread(_vault_note, node_id, stmt, payload, tenant_id)
@@ -227,6 +232,8 @@ async def hub_stream(ws: WebSocket, token: str = ""):
         return
     await ws.accept()
     tenant_id = payload.get("tenant_id", "default")
+    relay_task = (asyncio.create_task(_relay_gatekeeper_nodes(tenant_id))
+                  if cfg.REDIS_URL else None)
     try:
         while True:
             queue = (node for node in _NODES.values()
@@ -237,3 +244,28 @@ async def hub_stream(ws: WebSocket, token: str = ""):
         pass
     except Exception:  # noqa: BLE001
         pass
+    finally:
+        if relay_task:
+            relay_task.cancel()
+            try:
+                await relay_task
+            except asyncio.CancelledError:
+                pass
+
+
+async def _relay_gatekeeper_nodes(tenant_id: str) -> None:
+    """Mirror cross-worker Gatekeeper queue updates into this worker's snapshot."""
+    import redis.asyncio as redis
+    client = redis.Redis.from_url(cfg.REDIS_URL, decode_responses=True)
+    pubsub = client.pubsub()
+    try:
+        await pubsub.subscribe("finesse:gatekeeper:nodes:v1")
+        async for message in pubsub.listen():
+            if message.get("type") != "message":
+                continue
+            node = json.loads(message["data"])
+            if node.get("tenant_id", "default") == tenant_id:
+                _NODES[node["node_id"]] = node
+    finally:
+        await pubsub.aclose()
+        await client.aclose()
