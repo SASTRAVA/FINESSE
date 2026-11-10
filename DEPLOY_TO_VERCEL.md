@@ -72,6 +72,8 @@ Add each value to **Project → Settings → Environment Variables**, select **P
 
 The app refuses to report production setup-ready when PostgreSQL, Redis, or remote Qdrant configuration is absent. Startup applies `migrations/001_multi_tenant_rls.sql`, verifies the role cannot bypass RLS or be a superuser, and checks all 24 tenant tables have enabled and forced RLS plus the tenant policy. Configure the database role and network access before the first production request. Never initialize production using a database owner/superuser account.
 
+CEO sign-in requires `CEO_EMAIL`, `CEO_PASSWORD`, and `JWT_SECRET`. Those auth settings bootstrap the CEO account independently of the backend services, so a missing database/cache/vector service no longer turns a valid CEO sign-in into a misleading “bad credentials” response. The workspace can still show unavailable data until all production settings above are provisioned; `/api/health` remains 503 and reports each missing setting in that state. `KMS_MASTER_KEY` is required for encrypted tenant provider credentials, not for signing in.
+
 For key rotation, set the old key in `KMS_KEYRING` under its previous `kid`, set the new `KMS_MASTER_KEY` and `KMS_KEY_ID`, deploy, and re-encrypt tenant credentials using `TenantSecretStore.rotate_tenant(tenant_id)`. Verify every tenant has been rotated and all backups containing old envelopes have expired before removing the old key.
 
 ## 4. New deployment and smoke checks

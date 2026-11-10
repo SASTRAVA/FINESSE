@@ -32,7 +32,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field
 
-from .config import cfg, validate_runtime_security, vercel_missing_environment
+from .config import (cfg, validate_runtime_security, vercel_missing_auth_environment,
+                     vercel_missing_environment)
 from .auth import users, make_token, decode_token, role_of, can, ROLES
 from .auth.security import LoginThrottle
 from .rag import store, ingest_text, ingest_file
@@ -278,10 +279,9 @@ class LearningPlanIn(BaseModel):
 async def _startup():
     if cfg.IS_VERCEL and vercel_missing_environment():
         _logger.error(
-            "Vercel setup is incomplete. Add CEO_EMAIL, CEO_PASSWORD, JWT_SECRET, and "
-            "KMS_MASTER_KEY under Project Settings > Environment Variables, assign "
-            "Preview and Production scopes, then redeploy. /api/health reports missing "
-            "authentication settings.")
+            "Vercel backend setup is incomplete. /api/health reports the missing "
+            "Production environment variables. CEO login can still initialize when "
+            "CEO_EMAIL, CEO_PASSWORD, and JWT_SECRET are configured.")
         return
     validate_runtime_security()
     await store.init()
@@ -348,6 +348,12 @@ async def _shutdown():
 # ---------- auth ----------
 @app.post("/api/login")
 async def login(body: LoginIn):
+    missing = vercel_missing_auth_environment() if cfg.IS_VERCEL else []
+    if missing:
+        raise HTTPException(
+            503,
+            "Vercel authentication setup is incomplete. Configure: " + ", ".join(missing),
+        )
     account = login_throttle.normalize_account(body.email)
     if not login_throttle.allowed(account=account):
         raise HTTPException(429, "too many login attempts for this account")

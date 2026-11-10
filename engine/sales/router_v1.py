@@ -15,7 +15,7 @@ from jwt import PyJWTError
 from ..auth.security import (
     decode_token, make_token, make_gatekeeper_approval, verify_gatekeeper_approval,
 )
-from ..config import cfg
+from ..config import cfg, vercel_missing_auth_environment
 from ..auth.users import users
 from ..db.storage import storage
 from ..db.tenant_secrets import TenantSecretStore
@@ -80,6 +80,12 @@ async def list_services(_user: dict = Depends(current_sales_user)):
 
 @router.post("/auth/login")
 async def sales_login(body: LoginIn):
+    missing = vercel_missing_auth_environment() if cfg.IS_VERCEL else []
+    if missing:
+        raise HTTPException(
+            503,
+            "Vercel authentication setup is incomplete. Configure: " + ", ".join(missing),
+        )
     from ..main import login_throttle
     account = login_throttle.normalize_account(body.email)
     if not login_throttle.allowed(account=account):

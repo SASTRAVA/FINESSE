@@ -14,7 +14,7 @@ from dataclasses import dataclass, asdict, field
 from pathlib import Path
 from typing import Optional
 
-from ..config import cfg, vercel_missing_environment
+from ..config import cfg, vercel_missing_auth_environment
 from .rbac import role_of
 from .security import hash_pw, verify_pw
 
@@ -68,12 +68,11 @@ class UserStore:
                                   indent=2), encoding="utf-8")
 
     def _bootstrap_ceo(self):
-        if cfg.IS_VERCEL and vercel_missing_environment():
+        if cfg.IS_VERCEL and vercel_missing_auth_environment():
             logging.getLogger("finesse.startup").error(
-                "Vercel setup is incomplete. Set CEO_EMAIL, CEO_PASSWORD "
-                "(12+ characters), JWT_SECRET, and KMS_MASTER_KEY (each secret 32+ "
-                "characters where applicable) in the "
-                "Vercel Project Settings > Environment Variables, then redeploy.")
+                "Vercel authentication setup is incomplete. Set CEO_EMAIL, "
+                "CEO_PASSWORD (12+ characters), and JWT_SECRET (32+ characters) "
+                "in Project Settings > Environment Variables, then redeploy.")
             return
         if len(cfg.JWT_SECRET) < 32:
             raise RuntimeError("Set JWT_SECRET to a random secret of at least 32 characters.")

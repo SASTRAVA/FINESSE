@@ -317,8 +317,8 @@ def validate_runtime_security(config=None) -> None:
     logging.getLogger("finesse.security").critical("%s — development mode is unsafe", message)
 
 
-def vercel_missing_environment(config=None) -> list[str]:
-    """Return required Vercel bootstrap settings that are absent or unsafe."""
+def vercel_missing_auth_environment(config=None) -> list[str]:
+    """Return Vercel settings required to create users and issue login tokens."""
     config = config or cfg
     placeholders = {"dev-insecure-change-me", "changeme", "0000", "finesse-ceo-2026"}
 
@@ -340,9 +340,26 @@ def vercel_missing_environment(config=None) -> list[str]:
     if (len(password) < 12 or len(password.encode("utf-8")) > 72
             or unsafe(password)):
         missing.append("CEO_PASSWORD")
+    # Config has a development default CEO address; only an explicit deployment
+    # environment value is valid for the production bootstrap.
     email = (os.environ.get("CEO_EMAIL") or os.environ.get("CEO_USERNAME", "")).strip()
     if not email:
         missing.append("CEO_EMAIL")
+    return missing
+
+
+def vercel_missing_environment(config=None) -> list[str]:
+    """Return all required Vercel settings that are absent or unsafe."""
+    config = config or cfg
+    missing = vercel_missing_auth_environment(config)
+    placeholders = {"dev-insecure-change-me", "changeme", "0000", "finesse-ceo-2026"}
+
+    def unsafe(value: str) -> bool:
+        lowered = value.casefold()
+        return (lowered in placeholders or lowered.startswith("<")
+                or any(marker in lowered
+                       for marker in ("paste_", "generate_", "set_a_strong_")))
+
     master_key = str(getattr(config, "KMS_MASTER_KEY", "") or "").strip()
     if len(master_key.encode("utf-8")) < 32 or unsafe(master_key):
         missing.append("KMS_MASTER_KEY")

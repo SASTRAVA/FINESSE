@@ -130,6 +130,49 @@ with TestClient(app) as client:
             runtime = json.loads(result.stdout.strip().splitlines()[-1])
             self.assertTrue(runtime["is_vercel"])
 
+    def test_production_login_bootstraps_when_non_auth_services_are_missing(self):
+        with tempfile.TemporaryDirectory(prefix="finesse-vercel-partial-") as temp_dir:
+            env = os.environ.copy()
+            env.update({
+                "PYTHON_DOTENV_DISABLED": "1",
+                "VERCEL": "1",
+                "VERCEL_ENV": "production",
+                "CEO_EMAIL": "partial-config@example.test",
+                "CEO_PASSWORD": "TestOnly-Partial-Password-2026",
+                "JWT_SECRET": "test-only-partial-jwt-secret-" + "x" * 32,
+                "FINESSE_DATA_DIR": str(Path(temp_dir) / "data"),
+                "VAULT_PATH": str(Path(temp_dir) / "vault"),
+                "EMBEDDINGS_BACKEND": "hash",
+            })
+            for name in ("KMS_MASTER_KEY", "DATABASE_URL", "REDIS_URL", "QDRANT_URL"):
+                env.pop(name, None)
+            script = """
+from fastapi.testclient import TestClient
+from api.index import app
+from engine.auth.users import users
+from engine.config import cfg
+
+assert users.get(cfg.CEO_EMAIL) is not None, "CEO bootstrap was blocked by backend setup"
+with TestClient(app) as client:
+    login = client.post("/api/v1/auth/login", json={
+        "email": cfg.CEO_EMAIL, "password": cfg.CEO_PASSWORD})
+    assert login.status_code == 200, f"CEO login failed: {login.status_code} {login.text}"
+    health = client.get("/api/health")
+    assert health.status_code == 503, "partial backend must remain not-ready"
+    missing = health.json()["missing_env"]
+    assert "JWT_SECRET" not in missing and "CEO_PASSWORD" not in missing
+    assert "DATABASE_URL (PostgreSQL required in production)" in missing
+"""
+            result = subprocess.run(
+                [sys.executable, "-c", script], cwd=ROOT, env=env,
+                capture_output=True, text=True, timeout=120, check=False)
+            detail = next((line.strip() for line in reversed(result.stderr.splitlines())
+                           if line.strip().startswith((
+                               "AssertionError", "RuntimeError", "ValueError",
+                               "ModuleNotFoundError", "ImportError"))),
+                          "partial Vercel authentication setup test failed")
+            self.assertEqual(result.returncode, 0, detail)
+
     def test_vercel_without_auth_secrets_returns_diagnostic_health_response(self):
         with tempfile.TemporaryDirectory(prefix="finesse-vercel-unconfigured-") as temp_dir:
             env = os.environ.copy()
@@ -157,6 +200,10 @@ with TestClient(app) as client:
         "CEO_EMAIL", "CEO_PASSWORD", "JWT_SECRET", "KMS_MASTER_KEY"
     }.issubset(payload["missing_env"]), (
         f"missing variable list was incomplete: {sorted(payload['missing_env'])}")
+    login = client.post("/api/v1/auth/login", json={
+        "email": "missing@example.test", "password": "arbitrary-test-password"})
+    assert login.status_code == 503, f"expected setup error, got {login.status_code}"
+    assert "JWT_SECRET" in login.json()["detail"]
 """
             result = subprocess.run(
                 [sys.executable, "-c", script], cwd=ROOT, env=env,
