@@ -21,6 +21,9 @@ class VercelDeploymentTests(unittest.TestCase):
         from api.index import app
 
         with TestClient(app, follow_redirects=True) as client:
+            health = client.get("/health")
+            self.assertEqual(health.status_code, 200)
+            self.assertEqual(health.json(), {"status": "online"})
             self.assertEqual(client.get("/").status_code, 200)
             self.assertEqual(client.get("/workspace").status_code, 200)
             workspace = client.get("/workspace/")
@@ -173,7 +176,7 @@ with TestClient(app) as client:
         self.assertEqual(config["outputDirectory"], "engine/web/react-ui")
         destinations = {item["source"]: item["destination"]
                         for item in config["rewrites"]}
-        for source in ("/api/:path*", "/hubapi/:path*", "/dashboard", "/command",
+        for source in ("/health", "/api/:path*", "/hubapi/:path*", "/dashboard", "/command",
                        "/jarvis", "/voice", "/workspace/", "/workspace/:path*",
                        "/workspace", "/"):
             self.assertEqual(destinations[source], "/api/index.py")
