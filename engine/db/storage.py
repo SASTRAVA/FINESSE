@@ -47,8 +47,14 @@ class PlatformStorage:
             verify_postgres_role(self._connection)
         else:
             database = path or str(cfg.DATA / "platform.db")
-            self._connection = sqlite3.connect(database, check_same_thread=False)
+            self._connection = sqlite3.connect(
+                database, check_same_thread=False, timeout=5.0)
             self._connection.row_factory = sqlite3.Row
+            # WAL improves recovery after an interrupted write. FULL keeps each
+            # committed transaction durable across an unexpected drive removal.
+            self._connection.execute("PRAGMA journal_mode=WAL")
+            self._connection.execute("PRAGMA synchronous=FULL")
+            self._connection.execute("PRAGMA busy_timeout=5000")
         self._initialize()
 
     def _verify_postgres_version(self) -> None:

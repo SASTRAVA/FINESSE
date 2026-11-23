@@ -38,6 +38,19 @@ from scripts.import_catalog_sources import import_catalog
 
 
 class UnifiedEnterpriseFoundationTests(unittest.TestCase):
+    def test_sqlite_storage_uses_wal_and_durable_sync(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repository = PlatformStorage(str(Path(directory) / "platform.db"))
+            self.assertEqual(
+                repository._connection.execute("PRAGMA journal_mode").fetchone()[0],
+                "wal",
+            )
+            self.assertEqual(
+                repository._connection.execute("PRAGMA synchronous").fetchone()[0],
+                2,
+            )
+            repository.close()
+
     def test_tenant_storage_isolation_and_explicit_tenant_requirement(self):
         with tempfile.TemporaryDirectory() as directory:
             repository = PlatformStorage(str(Path(directory) / "platform.db"))
