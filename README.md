@@ -363,6 +363,51 @@ python -m unittest discover -s tests
 The seed command prints each new demo password once; it is intended only for
 local testing, not production accounts.
 
+## Run FINESSE from a portable SSD
+
+The portable Docker profile keeps FINESSE data, the vault, and local Ollama
+models in `portable-runtime/` on the drive. It publishes the API only on
+`127.0.0.1` and blocks container network egress during normal operation. The
+host must have Docker Engine and the Compose plugin installed and running; this
+is a local container server, not a bootable OS.
+
+Copy `.env.portable.example` to `.env.portable`, then fill in its required
+values. Generate separate `JWT_SECRET` and `KMS_MASTER_KEY` values with:
+
+```powershell
+python -c "import secrets; print(secrets.token_hex(32))"
+```
+
+While connected to the internet, build the app, fetch the Ollama image, and
+download the model to the SSD. These provisioning commands start Ollama only;
+the FINESSE API stays stopped:
+
+```powershell
+docker compose --env-file .env.portable -f deploy/compose.portable.yaml build api
+docker compose --env-file .env.portable -f deploy/compose.portable.yaml pull ollama
+docker compose --env-file .env.portable -f deploy/compose.portable.yaml -f deploy/compose.portable.provision.yaml up -d ollama
+docker compose --env-file .env.portable -f deploy/compose.portable.yaml -f deploy/compose.portable.provision.yaml exec ollama ollama pull llama3.2:3b
+docker compose --env-file .env.portable -f deploy/compose.portable.yaml -f deploy/compose.portable.provision.yaml down
+```
+
+Then start the server from the repository root:
+
+```powershell
+docker compose --env-file .env.portable -f deploy/compose.portable.yaml config --quiet
+docker compose --env-file .env.portable -f deploy/compose.portable.yaml up --no-build -d
+Invoke-RestMethod http://127.0.0.1:8600/health
+```
+
+Stop the containers and wait for them to exit before unplugging the drive:
+
+```powershell
+docker compose --env-file .env.portable -f deploy/compose.portable.yaml down
+```
+
+For model/image transfer, backup, port changes, and the full PRD-to-repository
+implementation report, see [`deploy/PORTABLE_SSD.md`](deploy/PORTABLE_SSD.md).
+Docker Engine still stores image layers and host logs on the host computer.
+
 ## Main components
 
 | Path | Purpose |
