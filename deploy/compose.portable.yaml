@@ -1,0 +1,92 @@
+name: finesse-portable
+
+services:
+  api:
+    image: finesse-portable:local
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    environment:
+      FINESSE_ENV: development
+      HOST: 0.0.0.0
+      PORT: 8600
+      FINESSE_DATA_DIR: /app/data
+      VAULT_PATH: /app/vault
+      QDRANT_MODE: embedded
+      QDRANT_PATH: /app/data/qdrant
+      EMBEDDINGS_BACKEND: hash
+      LOCAL_LLM_BASE_URL: http://ollama:11434/v1
+      LOCAL_LLM_MODEL: ${LOCAL_LLM_MODEL:-llama3.2:3b}
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env.portable}
+      CEO_EMAIL: ${CEO_EMAIL:?Set CEO_EMAIL in .env.portable}
+      CEO_PASSWORD: ${CEO_PASSWORD:?Set CEO_PASSWORD in .env.portable}
+      KMS_MASTER_KEY: ${KMS_MASTER_KEY:?Set KMS_MASTER_KEY in .env.portable}
+      CORS_ORIGINS: http://127.0.0.1:8600,http://localhost:8600
+      PUBLIC_BASE_URL: http://127.0.0.1:${FINESSE_PORT:-8600}
+      OTEL_ENABLED: "false"
+      HERMES_ENABLED: "false"
+      CRAWLER_ENABLED: "false"
+      SKILL_HARVEST_ENABLED: "false"
+      SECURITY_AUDIT_ENABLED: "false"
+      SALES_DRY_RUN: "true"
+      SALES_LIVE_OUTREACH_ENABLED: "false"
+      EMAIL_LIVE_ENABLED: "false"
+      VOICE_LIVE_ENABLED: "false"
+      SALES_ENRICHMENT_ENABLED: "false"
+      CALENDAR_SYNC_ENABLED: "false"
+    ports:
+      - "127.0.0.1:${FINESSE_PORT:-8600}:8600"
+    volumes:
+      - ../portable-runtime/data:/app/data
+      - ../portable-runtime/vault:/app/vault
+    depends_on:
+      ollama:
+        condition: service_healthy
+    networks:
+      - isolated
+    user: "10001:10001"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8600/health', timeout=3).read()"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:0.40.17
+    environment:
+      OLLAMA_HOST: 0.0.0.0:11434
+    volumes:
+      - ../portable-runtime/ollama:/root/.ollama
+    networks:
+      - isolated
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size:1g
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 15s
+      timeout: 10s
+      retries: 8
+      start_period: 30s
+    restart: unless-stopped
+
+networks:
+  isolated:
+    internal: true

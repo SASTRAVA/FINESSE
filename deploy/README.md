@@ -1,5 +1,9 @@
 # Rootless deployment and operations
 
+For the local, SSD-backed container server profile, see
+[`PORTABLE_SSD.md`](PORTABLE_SSD.md). It stores application state and local
+models on the drive and uses an internal-only runtime network.
+
 ## Data flow and trust boundaries
 
 ```text

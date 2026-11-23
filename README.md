@@ -340,14 +340,15 @@ database role that is not a superuser and does not have `BYPASSRLS`. Use Redis
 via `REDIS_URL` for shared login throttling across API workers.
 
 The rootless Compose deployment and operations runbook are in
-[`deploy/`](deploy/README.md). It publishes the API only on host loopback and
-uses non-root processes, read-only root filesystems, dropped Linux
-capabilities, and `no-new-privileges`. Set a random `POSTGRES_PASSWORD`,
-production auth secrets, and the exact TLS proxy IP in `TRUSTED_PROXY_IPS`;
-production startup intentionally rejects a non-loopback bind without a
+[`deploy/README.md`](deploy/README.md). It uses read-only root filesystems,
+dropped Linux capabilities, and `no-new-privileges`. Set a random
+`POSTGRES_PASSWORD`, production auth secrets, and the exact TLS proxy IP in
+`TRUSTED_PROXY_IPS`; production startup rejects a non-loopback bind without a
 trusted proxy or explicit override. Provider live flags remain off in Compose.
-The security worker cannot execute scans; it only marks authorized plans for
-operator review.
+The security worker only marks authorized plans for operator review.
+
+For a single-host, SSD-backed local server profile with local Ollama and an
+offline runtime network, see [`deploy/PORTABLE_SSD.md`](deploy/PORTABLE_SSD.md).
 
 ## Useful commands
 

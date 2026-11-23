@@ -1,0 +1,5 @@
+# Use only during first-time connected setup to let Ollama download a model.
+# Start only the `ollama` service with this overlay; the API stays stopped.
+networks:
+  isolated:
+    internal: false

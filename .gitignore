@@ -2,9 +2,11 @@
 .env
 .env.*
 !.env.example
+!.env.portable.example
 # runtime data
 data/
 vault/
+/portable-runtime/
 FINESSE VAULT/
 training/data/
 training/adapters/
