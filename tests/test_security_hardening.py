@@ -42,7 +42,7 @@ class SecurityHardeningTests(unittest.TestCase):
         self.assertNotIn("<tool_call", wrapped)
 
     def test_non_executive_cannot_retrieve_exec_or_another_users_memory(self):
-        async def fake_search(query, limit, flt=None):
+        async def fake_search(query, limit, flt=None, tenant_id=None):
             if flt["lane"] == "coding":
                 return [(0.99, {"lane": "exec", "sensitivity": "confidential",
                                "source": "vault", "text": "executive material"}),
@@ -61,7 +61,7 @@ class SecurityHardeningTests(unittest.TestCase):
         self.assertEqual(hits, [])
 
     def test_omitted_rag_role_falls_back_to_general_lane_and_filters_exec(self):
-        async def fake_search(query, limit, flt=None):
+        async def fake_search(query, limit, flt=None, tenant_id=None):
             return [(0.9, {"lane": "exec", "sensitivity": "restricted",
                            "source": "vault", "text": "not for general users"})]
 
@@ -332,7 +332,7 @@ class SecurityHardeningTests(unittest.TestCase):
                                          "new_password": "a-strong-new-password"})
             self.assertEqual(response.status_code, 200)
             change.assert_called_once_with("staff@example.test", "old-password",
-                                           "a-strong-new-password")
+                                           "a-strong-new-password", "default")
             self.assertEqual(audit.await_args.args[2], "password changed")
             self.assertNotIn("old-password", str(audit.await_args))
             self.assertNotIn("a-strong-new-password", str(audit.await_args))
@@ -407,8 +407,8 @@ class SecurityHardeningTests(unittest.TestCase):
         with patch("engine.rag.store.embedder.embed", new=AsyncMock(side_effect=fake_embed)) as embed:
             asyncio.run(vector_store.upsert(
                 ["public", "private"],
-                [{"lane": "general", "sensitivity": "public"},
-                 {"lane": "exec", "sensitivity": "confidential"}]))
+                [{"lane": "general", "sensitivity": "public", "tenant_id": "default"},
+                 {"lane": "exec", "sensitivity": "confidential", "tenant_id": "default"}]))
         self.assertEqual([call.kwargs["sensitivity"] for call in embed.await_args_list],
                          ["public", "confidential"])
 

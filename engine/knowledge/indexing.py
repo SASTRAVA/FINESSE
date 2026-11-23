@@ -35,6 +35,7 @@ async def index_public_catalog(vector_store) -> int:
             payloads.append({
                 "title": title, "lane": "general", "role": "general",
                 "sensitivity": "public", "source": source, "chunk": index,
+                "tenant_id": "default",
             })
             ids.append(str(uuid.uuid5(
                 uuid.NAMESPACE_URL,

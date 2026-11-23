@@ -10,6 +10,9 @@ orchestrator, a FastAPI service, and browser dashboards.
 > prioritized findings.
 > See [DEPLOY_TO_VERCEL.md](DEPLOY_TO_VERCEL.md) for the deployment setup and
 > [docs/FINESSE_REQUIREMENTS.md](docs/FINESSE_REQUIREMENTS.md) for the PRD-to-code map.
+> See [ATLAS.md](ATLAS.md) for the prompt-by-prompt construction status and
+> [docs/SECURITY_AUDIT_BASELINE.md](docs/SECURITY_AUDIT_BASELINE.md) for the
+> security review boundary and unresolved production checks.
 > The implementation-aligned API contract is in [PRD.md](PRD.md). See
 > [DEPLOY_TO_VERCEL.md](DEPLOY_TO_VERCEL.md) for Vercel settings and release checks.
 
@@ -48,13 +51,21 @@ The conjunction engine selects review-only workflow plans and explicitly
 reports that it performed no external side effects. `engine/db/storage.py`
 provides tenant-keyed SQLite JSON persistence in local and test environments.
 With PostgreSQL 16+, startup applies pending migrations, checks that the app
-role cannot bypass RLS, and verifies all 24 tenant tables have forced RLS
-policies. `ENVIRONMENT=production` refuses SQLite and `/tmp` fallback.
+role cannot bypass RLS, and verifies all 25 tenant tables have forced RLS
+policies. Append-only audit events and heads have separate tenant RLS policies.
+`ENVIRONMENT=production` refuses SQLite and `/tmp` fallback.
 `REDIS_URL` enables shared login throttling, atomic Gatekeeper nonces, and
 event-stream fan-out. Remote Qdrant uses `QDRANT_URL` and optional
 `QDRANT_API_KEY`; production does not silently fall back to in-memory vectors
-when the configured cluster is unavailable. Some session, account, audit,
-and runtime state remains file-backed or process-local.
+when the configured cluster is unavailable. Some session, account, and runtime
+state remains file-backed or process-local.
+
+Operator WebSocket connections use short-lived, single-use tickets and an
+Origin allowlist instead of putting bearer tokens in WebSocket URLs. Uploads
+are checked for expected file signatures and bounded archive expansion before
+they are persisted. Tenant-scoped retrieval combines dense and lexical ranks
+and returns citation references. These controls have automated regression
+coverage; they do not replace a production security assessment.
 
 Sales lead generation uses deterministic synthetic records while
 `SALES_DRY_RUN=true` (the default). Email and voice adapters, enrichment, and
@@ -138,6 +149,19 @@ a local LLM endpoint if data must stay on your machine.
 uses `requirements-local.txt`, which adds FastEmbed for local CPU embeddings and
 the optional Uvicorn standard extras. Vercel uses the lightweight hash
 embedding backend to keep its function bundle within the platform size limit.
+
+## Portable SSD server
+
+The repository includes a Docker Compose profile for running FINESSE as a
+loopback-only local server with SQLite, embedded Qdrant, and local Ollama
+models stored under `portable-runtime/`. It also includes a guarded stop and
+SQLite backup helper at `scripts/portable_safe_stop.py`, plus offline Ed25519
+verification helpers for license documents and update bundles. The verifier
+is not yet integrated into startup or an update installer. This setup is a
+host-assisted portable server: it is not a bootable OS, does not relocate
+Docker's image layers or host logs onto the SSD, and cannot provide hardware
+encryption, physical unlock, or safe-eject guarantees by itself. See
+[deploy/PORTABLE_SSD.md](deploy/PORTABLE_SSD.md) for setup and hardware limits.
 
 ## Quick start (Windows PowerShell)
 

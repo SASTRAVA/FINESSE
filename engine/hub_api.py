@@ -19,7 +19,7 @@ import re
 import time
 import uuid
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, HTTPException
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, HTTPException, Form
 from fastapi.security import OAuth2PasswordRequestForm
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
@@ -27,6 +27,7 @@ from pydantic import BaseModel, Field
 from .config import cfg
 from .auth import decode_token
 from .auth.rbac import can, role_of
+from .security.ws_tickets import consume_ticket, issue_ticket
 router = APIRouter(prefix="/hubapi")
 _bearer = HTTPBearer(auto_error=False)
 
@@ -114,14 +115,15 @@ def _vault_note(node_id: str, stmt: str, data: dict, tenant_id: str = "default")
 
 
 @router.post("/token")
-async def hub_token(form: OAuth2PasswordRequestForm = Depends()):
+async def hub_token(form: OAuth2PasswordRequestForm = Depends(),
+                    tenant_id: str = Form("default")):
     """Gatekeeper login using an account from the FINESSE user store."""
     from .auth import users, make_token
     from .main import login_throttle
     account = login_throttle.normalize_account(form.username)
     if not login_throttle.allowed(account=account):
         raise HTTPException(429, "too many login attempts for this account")
-    u = users.authenticate(form.username, form.password)
+    u = users.authenticate(form.username, form.password, tenant_id)
     if u:
         login_throttle.succeeded(account=account)
         return {"access_token": make_token(u.email, u.role, u.tier, u.tenant_id),
@@ -221,9 +223,25 @@ async def hub_queue(user: dict = Depends(_current_user)):
     return {"queue": sorted(queue, key=lambda x: -x["ts"])[:50]}
 
 
+@router.post("/ws-ticket")
+async def hub_ws_ticket(user: dict = Depends(_current_user)):
+    """Mint a one-use browser credential for the tenant's Gatekeeper stream."""
+    _require_command_access(user)
+    try:
+        ticket = issue_ticket(user)
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(503, "WebSocket ticket service is unavailable") from exc
+    return {"ticket": ticket, "tenant_id": user.get("tenant_id", "default"),
+            "expires_in": 60}
+
+
 @router.websocket("/gatekeeper/stream")
-async def hub_stream(ws: WebSocket, token: str = ""):
-    payload = decode_token(token)
+async def hub_stream(ws: WebSocket, ticket: str = "", tenant_id: str = ""):
+    origin = ws.headers.get("origin", "")
+    if not origin or origin not in cfg.CORS_ORIGINS:
+        await ws.close(code=4403)
+        return
+    payload = consume_ticket(ticket, tenant_id)
     if not payload:
         await ws.close(code=4401)
         return

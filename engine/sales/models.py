@@ -58,6 +58,7 @@ class CampaignCreateIn(BaseModel):
 class LoginIn(BaseModel):
     email: str = Field(min_length=3, max_length=320)
     password: str = Field(min_length=1, max_length=1024)
+    tenant_id: str = Field(default="default", pattern=r"^[a-z0-9][a-z0-9_-]{0,127}$")
 
 
 class ConsentIn(BaseModel):

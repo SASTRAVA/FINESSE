@@ -1,0 +1,1558 @@
+{
+  "http_operations": [
+    {
+      "authenticated": false,
+      "method": "GET",
+      "operation_id": "landing__get",
+      "path": "/",
+      "public_reason": "Static sign-in page; application data APIs enforce authentication.",
+      "security": []
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "activate_emergency_stop_route_api_admin_emergency_stop_post",
+      "path": "/api/admin/emergency-stop",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "agent_run_route_api_agent_run_post",
+      "path": "/api/agent/run",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "GET",
+      "operation_id": "agents_route_api_agents_get",
+      "path": "/api/agents",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "new_agent_route_api_agents_new_post",
+      "path": "/api/agents/new",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "GET",
+      "operation_id": "audit_route_api_audit_get",
+      "path": "/api/audit",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "change_password_api_auth_change_password_post",
+      "path": "/api/auth/change-password",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "GET",
+      "operation_id": "command_overview_api_command_overview_get",
+      "path": "/api/command/overview",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "crm_generate_api_crm_generate_post",
+      "path": "/api/crm/generate",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "crm_add_lead_api_crm_leads_post",
+      "path": "/api/crm/leads",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "crm_approve_api_crm_leads__lead_id__approve_outreach_post",
+      "path": "/api/crm/leads/{lead_id}/approve-outreach",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "crm_stage_api_crm_leads__lead_id__stage_post",
+      "path": "/api/crm/leads/{lead_id}/stage",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "GET",
+      "operation_id": "crm_pipeline_api_crm_pipeline_get",
+      "path": "/api/crm/pipeline",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "diagram_route_api_diagram_post",
+      "path": "/api/diagram",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "directive_route_api_directive_post",
+      "path": "/api/directive",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "GET",
+      "operation_id": "graph_route_api_graph_get",
+      "path": "/api/graph",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": false,
+      "method": "GET",
+      "operation_id": "api_health_api_health_get",
+      "path": "/api/health",
+      "public_reason": "Setup diagnostic returns only missing setting names, never values.",
+      "security": []
+    },
+    {
+      "authenticated": true,
+      "method": "GET",
+      "operation_id": "hermes_route_api_hermes_get",
+      "path": "/api/hermes",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "inject_file_route_api_inject_file_post",
+      "path": "/api/inject/file",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "inject_text_route_api_inject_text_post",
+      "path": "/api/inject/text",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "GET",
+      "operation_id": "innovation_feed_api_innovation_get",
+      "path": "/api/innovation",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "GET",
+      "operation_id": "keys_route_api_keys_get",
+      "path": "/api/keys",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": false,
+      "method": "POST",
+      "operation_id": "login_api_login_post",
+      "path": "/api/login",
+      "public_reason": "Credential exchange; login throttling and password verification apply.",
+      "security": []
+    },
+    {
+      "authenticated": true,
+      "method": "GET",
+      "operation_id": "manifest_route_api_manifest_get",
+      "path": "/api/manifest",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "GET",
+      "operation_id": "me_api_me_get",
+      "path": "/api/me",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "reweave_route_api_reweave_post",
+      "path": "/api/reweave",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": false,
+      "method": "GET",
+      "operation_id": "list_roles_api_roles_get",
+      "path": "/api/roles",
+      "public_reason": "Non-sensitive role names support the sign-in client.",
+      "security": []
+    },
+    {
+      "authenticated": true,
+      "method": "GET",
+      "operation_id": "sastrava_catalog_api_sastrava_catalog_get",
+      "path": "/api/sastrava/catalog",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "sastrava_intake_api_sastrava_intake_post",
+      "path": "/api/sastrava/intake",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "sastrava_learning_plan_api_sastrava_learning_plan_post",
+      "path": "/api/sastrava/learning-plan",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "DELETE",
+      "operation_id": "erase_scan_evidence_api_sastrava_scans__scan_id__evidence_delete",
+      "path": "/api/sastrava/scans/{scan_id}/evidence",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "sastrava_security_scope_api_sastrava_security_scope_post",
+      "path": "/api/sastrava/security-scope",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "security_audit_now_api_security_audit_post",
+      "path": "/api/security/audit",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "GET",
+      "operation_id": "security_report_api_security_report_get",
+      "path": "/api/security/report",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "GET",
+      "operation_id": "status_route_api_status_get",
+      "path": "/api/status",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "GET",
+      "operation_id": "swarms_route_api_swarms_get",
+      "path": "/api/swarms",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "GET",
+      "operation_id": "tools_route_api_tools_get",
+      "path": "/api/tools",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "tool_call_route_api_tools_call_post",
+      "path": "/api/tools/call",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "tts_route_api_tts_post",
+      "path": "/api/tts",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "GET",
+      "operation_id": "list_users_api_users_get",
+      "path": "/api/users",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "create_user_api_users_post",
+      "path": "/api/users",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "emergency_stop_api_v1_admin_emergency_stop_post",
+      "path": "/api/v1/admin/emergency-stop",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "agent_command_api_v1_agent_commands_post",
+      "path": "/api/v1/agent/commands",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "GET",
+      "operation_id": "campaign_analytics_api_v1_analytics_campaigns__campaign_id__get",
+      "path": "/api/v1/analytics/campaigns/{campaign_id}",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "GET",
+      "operation_id": "analytics_funnel_api_v1_analytics_funnel_get",
+      "path": "/api/v1/analytics/funnel",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "GET",
+      "operation_id": "analytics_overview_api_v1_analytics_overview_get",
+      "path": "/api/v1/analytics/overview",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "GET",
+      "operation_id": "audit_logs_api_v1_audit_logs_get",
+      "path": "/api/v1/audit-logs",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": false,
+      "method": "POST",
+      "operation_id": "sales_login_api_v1_auth_login_post",
+      "path": "/api/v1/auth/login",
+      "public_reason": "Credential exchange; login throttling and password verification apply.",
+      "security": []
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "logout_sales_api_v1_auth_logout_post",
+      "path": "/api/v1/auth/logout",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "refresh_sales_token_api_v1_auth_refresh_post",
+      "path": "/api/v1/auth/refresh",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "GET",
+      "operation_id": "calendar_meetings_api_v1_calendar_meetings_get",
+      "path": "/api/v1/calendar/meetings",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "create_meeting_api_v1_calendar_meetings_post",
+      "path": "/api/v1/calendar/meetings",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "GET",
+      "operation_id": "calendar_slots_api_v1_calendar_slots_get",
+      "path": "/api/v1/calendar/slots",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "GET",
+      "operation_id": "list_campaigns_api_v1_campaigns_get",
+      "path": "/api/v1/campaigns",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "create_campaign_api_v1_campaigns_post",
+      "path": "/api/v1/campaigns",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "plan_campaign_api_v1_campaigns_plan_post",
+      "path": "/api/v1/campaigns/plan",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "GET",
+      "operation_id": "get_campaign_api_v1_campaigns__campaign_id__get",
+      "path": "/api/v1/campaigns/{campaign_id}",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "approve_campaign_api_v1_campaigns__campaign_id__approve_post",
+      "path": "/api/v1/campaigns/{campaign_id}/approve",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "cancel_campaign_api_v1_campaigns__campaign_id__cancel_post",
+      "path": "/api/v1/campaigns/{campaign_id}/cancel",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "match_campaign_services_api_v1_campaigns__campaign_id__match_services_post",
+      "path": "/api/v1/campaigns/{campaign_id}/match-services",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "pause_campaign_api_v1_campaigns__campaign_id__pause_post",
+      "path": "/api/v1/campaigns/{campaign_id}/pause",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "resume_campaign_api_v1_campaigns__campaign_id__resume_post",
+      "path": "/api/v1/campaigns/{campaign_id}/resume",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "GET",
+      "operation_id": "catalog_repositories_api_v1_catalog_repositories_get",
+      "path": "/api/v1/catalog/repositories",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "certify_repository_api_v1_catalog_repositories_certify_post",
+      "path": "/api/v1/catalog/repositories/certify",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "compliance_check_api_v1_compliance_check_post",
+      "path": "/api/v1/compliance/check",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "start_email_campaign_api_v1_email_campaigns__campaign_id__start_post",
+      "path": "/api/v1/email/campaigns/{campaign_id}/start",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "draft_email_api_v1_email_generate_post",
+      "path": "/api/v1/email/generate",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "generate_email_batch_api_v1_email_generate_batch_post",
+      "path": "/api/v1/email/generate-batch",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "GET",
+      "operation_id": "list_email_messages_api_v1_email_messages_get",
+      "path": "/api/v1/email/messages",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "GET",
+      "operation_id": "get_email_message_api_v1_email_messages__message_id__get",
+      "path": "/api/v1/email/messages/{message_id}",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "preview_email_api_v1_email_preview_post",
+      "path": "/api/v1/email/preview",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "send_email_dry_run_api_v1_email_send_post",
+      "path": "/api/v1/email/send",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "GET",
+      "operation_id": "email_templates_api_v1_email_templates_get",
+      "path": "/api/v1/email/templates",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "unsubscribe_email_api_v1_email_unsubscribe_post",
+      "path": "/api/v1/email/unsubscribe",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": false,
+      "method": "GET",
+      "operation_id": "unsubscribe_from_email_api_v1_email_unsubscribe__token__get",
+      "path": "/api/v1/email/unsubscribe/{token}",
+      "public_reason": "Signed, purpose-bound, expiring unsubscribe capability token.",
+      "security": []
+    },
+    {
+      "authenticated": false,
+      "method": "POST",
+      "operation_id": "unsubscribe_from_email_api_v1_email_unsubscribe__token__post",
+      "path": "/api/v1/email/unsubscribe/{token}",
+      "public_reason": "Signed, purpose-bound, expiring unsubscribe capability token.",
+      "security": []
+    },
+    {
+      "authenticated": true,
+      "method": "GET",
+      "operation_id": "list_icps_api_v1_icps_get",
+      "path": "/api/v1/icps",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "GET",
+      "operation_id": "list_dead_letter_jobs_api_v1_jobs_dlq_get",
+      "path": "/api/v1/jobs/dlq",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "GET",
+      "operation_id": "get_job_api_v1_jobs__job_id__get",
+      "path": "/api/v1/jobs/{job_id}",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "cancel_job_api_v1_jobs__job_id__cancel_post",
+      "path": "/api/v1/jobs/{job_id}/cancel",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "GET",
+      "operation_id": "list_leads_api_v1_leads_get",
+      "path": "/api/v1/leads",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "bulk_import_leads_api_v1_leads_bulk_import_post",
+      "path": "/api/v1/leads/bulk-import",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "GET",
+      "operation_id": "export_leads_api_v1_leads_export_get",
+      "path": "/api/v1/leads/export",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "generate_leads_route_api_v1_leads_generate_post",
+      "path": "/api/v1/leads/generate",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "GET",
+      "operation_id": "search_leads_api_v1_leads_search_get",
+      "path": "/api/v1/leads/search",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "GET",
+      "operation_id": "get_lead_api_v1_leads__lead_id__get",
+      "path": "/api/v1/leads/{lead_id}",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "approve_lead_api_v1_leads__lead_id__approve_post",
+      "path": "/api/v1/leads/{lead_id}/approve",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "enrich_lead_api_v1_leads__lead_id__enrich_post",
+      "path": "/api/v1/leads/{lead_id}/enrich",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "rescore_lead_api_v1_leads__lead_id__score_post",
+      "path": "/api/v1/leads/{lead_id}/score",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "verify_lead_api_v1_leads__lead_id__verify_post",
+      "path": "/api/v1/leads/{lead_id}/verify",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "GET",
+      "operation_id": "memory_patterns_api_v1_memory_patterns_get",
+      "path": "/api/v1/memory/patterns",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "learn_memory_pattern_api_v1_memory_patterns_post",
+      "path": "/api/v1/memory/patterns",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "run_conjunction_api_v1_orchestra_conjunction_post",
+      "path": "/api/v1/orchestra/conjunction",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": false,
+      "method": "GET",
+      "operation_id": "platform_runtime_api_v1_platform_runtime_get",
+      "path": "/api/v1/platform/runtime",
+      "public_reason": "Public deployment readiness booleans and counts only.",
+      "security": []
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "record_consent_api_v1_privacy_consent_post",
+      "path": "/api/v1/privacy/consent",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "DELETE",
+      "operation_id": "erase_tenant_data_api_v1_privacy_tenant_data_delete",
+      "path": "/api/v1/privacy/tenant-data",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "prepare_security_scan_api_v1_security_scans_post",
+      "path": "/api/v1/security/scans",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "GET",
+      "operation_id": "security_tools_api_v1_security_tools_get",
+      "path": "/api/v1/security/tools",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "security_verify_target_api_v1_security_verify_target_post",
+      "path": "/api/v1/security/verify-target",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "GET",
+      "operation_id": "list_services_api_v1_services_get",
+      "path": "/api/v1/services",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "GET",
+      "operation_id": "service_details_api_v1_services__service_id__get",
+      "path": "/api/v1/services/{service_id}",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "PUT",
+      "operation_id": "set_provider_secret_api_v1_settings_provider_secrets_put",
+      "path": "/api/v1/settings/provider-secrets",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "DELETE",
+      "operation_id": "delete_provider_secret_api_v1_settings_provider_secrets__name__delete",
+      "path": "/api/v1/settings/provider-secrets/{name}",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "GET",
+      "operation_id": "suppression_list_api_v1_suppression_list_get",
+      "path": "/api/v1/suppression-list",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "GET",
+      "operation_id": "sales_user_profile_api_v1_users_me_get",
+      "path": "/api/v1/users/me",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "voice_call_api_v1_voice_calls_post",
+      "path": "/api/v1/voice/calls",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "GET",
+      "operation_id": "get_voice_call_api_v1_voice_calls__call_id__get",
+      "path": "/api/v1/voice/calls/{call_id}",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "hangup_voice_call_api_v1_voice_calls__call_id__hangup_post",
+      "path": "/api/v1/voice/calls/{call_id}/hangup",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "summarize_voice_call_api_v1_voice_calls__call_id__summarize_post",
+      "path": "/api/v1/voice/calls/{call_id}/summarize",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "transfer_voice_call_api_v1_voice_calls__call_id__transfer_post",
+      "path": "/api/v1/voice/calls/{call_id}/transfer",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "start_voice_campaign_api_v1_voice_campaigns__campaign_id__start_post",
+      "path": "/api/v1/voice/campaigns/{campaign_id}/start",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "voice_command_api_v1_voice_commands_post",
+      "path": "/api/v1/voice/commands",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "GET",
+      "operation_id": "voice_sessions_api_v1_voice_sessions_get",
+      "path": "/api/v1/voice/sessions",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "email_event_api_v1_webhooks_email_events_post",
+      "path": "/api/v1/webhooks/email/events",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "receive_email_reply_api_v1_webhooks_email_replies_post",
+      "path": "/api/v1/webhooks/email/replies",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": false,
+      "method": "POST",
+      "operation_id": "provider_email_webhook_api_v1_webhooks_providers_email_post",
+      "path": "/api/v1/webhooks/providers/email",
+      "public_reason": "Provider HMAC signature is verified before tenant-scoped processing.",
+      "security": []
+    },
+    {
+      "authenticated": false,
+      "method": "POST",
+      "operation_id": "provider_voice_webhook_api_v1_webhooks_providers_voice_post",
+      "path": "/api/v1/webhooks/providers/voice",
+      "public_reason": "Provider HMAC or Twilio request signature is verified before processing.",
+      "security": []
+    },
+    {
+      "authenticated": false,
+      "method": "POST",
+      "operation_id": "provider_voice_opt_out_webhook_api_v1_webhooks_providers_voice_opt_out_post",
+      "path": "/api/v1/webhooks/providers/voice/opt-out",
+      "public_reason": "Twilio request signature is verified before tenant-scoped opt-out.",
+      "security": []
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "voice_event_api_v1_webhooks_voice_events_post",
+      "path": "/api/v1/webhooks/voice/events",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "voice_recording_api_v1_webhooks_voice_recordings_post",
+      "path": "/api/v1/webhooks/voice/recordings",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "voice_transcript_api_v1_webhooks_voice_transcripts_post",
+      "path": "/api/v1/webhooks/voice/transcripts",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "voice_route_api_voice_post",
+      "path": "/api/voice",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "create_ws_ticket_api_ws_ticket_post",
+      "path": "/api/ws-ticket",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": false,
+      "method": "GET",
+      "operation_id": "command_center_command_get",
+      "path": "/command",
+      "public_reason": "Static sign-in page; application data APIs enforce authentication.",
+      "security": []
+    },
+    {
+      "authenticated": false,
+      "method": "GET",
+      "operation_id": "universe_dashboard_get",
+      "path": "/dashboard",
+      "public_reason": "Static sign-in page; application data APIs enforce authentication.",
+      "security": []
+    },
+    {
+      "authenticated": false,
+      "method": "GET",
+      "operation_id": "health_health_get",
+      "path": "/health",
+      "public_reason": "Liveness probe returns only a generic online status.",
+      "security": []
+    },
+    {
+      "authenticated": true,
+      "method": "GET",
+      "operation_id": "hub_queue_hubapi_gatekeeper_queue_get",
+      "path": "/hubapi/gatekeeper/queue",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "hub_problems_hubapi_problems_post",
+      "path": "/hubapi/problems",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": false,
+      "method": "GET",
+      "operation_id": "hub_clusters_hubapi_swarm_clusters_get",
+      "path": "/hubapi/swarm/clusters",
+      "public_reason": "Public static agent catalog; contains no tenant data.",
+      "security": []
+    },
+    {
+      "authenticated": false,
+      "method": "POST",
+      "operation_id": "hub_token_hubapi_token_post",
+      "path": "/hubapi/token",
+      "public_reason": "Credential exchange; login throttling and password verification apply.",
+      "security": []
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "hub_ws_ticket_hubapi_ws_ticket_post",
+      "path": "/hubapi/ws-ticket",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": false,
+      "method": "GET",
+      "operation_id": "innovation_page_innovation_get",
+      "path": "/innovation",
+      "public_reason": "Static sign-in page; application data APIs enforce authentication.",
+      "security": []
+    },
+    {
+      "authenticated": false,
+      "method": "GET",
+      "operation_id": "jarvis_page_jarvis_get",
+      "path": "/jarvis",
+      "public_reason": "Static sign-in page; application data APIs enforce authentication.",
+      "security": []
+    },
+    {
+      "authenticated": false,
+      "method": "GET",
+      "operation_id": "universe_universe_get",
+      "path": "/universe",
+      "public_reason": "Static sign-in page; application data APIs enforce authentication.",
+      "security": []
+    },
+    {
+      "authenticated": false,
+      "method": "GET",
+      "operation_id": "jarvis_page_voice_get",
+      "path": "/voice",
+      "public_reason": "Static sign-in page; application data APIs enforce authentication.",
+      "security": []
+    }
+  ],
+  "openapi_version": "3.1.0",
+  "schema_version": 1,
+  "websockets": [
+    {
+      "authentication": "opaque single-use ticket",
+      "origin_check": true,
+      "path": "/ws"
+    },
+    {
+      "authentication": "opaque single-use ticket",
+      "origin_check": true,
+      "path": "/hubapi/gatekeeper/stream"
+    }
+  ]
+}

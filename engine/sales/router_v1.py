@@ -90,7 +90,7 @@ async def sales_login(body: LoginIn):
     account = login_throttle.normalize_account(body.email)
     if not login_throttle.allowed(account=account):
         raise HTTPException(429, "too many login attempts for this account")
-    account_user = users.authenticate(body.email, body.password)
+    account_user = users.authenticate(body.email, body.password, body.tenant_id)
     if account_user is None:
         login_throttle.failed(account=account)
         raise HTTPException(401, "bad credentials")
@@ -114,7 +114,7 @@ async def logout_sales(_user: dict = Depends(current_sales_user)):
 
 @router.get("/users/me")
 async def sales_user_profile(user: dict = Depends(current_sales_user)):
-    record = users.get(user["sub"])
+    record = users.get(user["sub"], _tenant(user))
     if record is None:
         raise HTTPException(404, "user not found")
     return record.public()
@@ -351,16 +351,6 @@ async def get_lead(lead_id: str, user: dict = Depends(current_sales_user)):
     if lead is None:
         raise HTTPException(404, "lead not found")
     return lead
-
-
-@router.post("/leads/{lead_id}/enrich")
-async def enrich_lead(lead_id: str, user: dict = Depends(current_sales_user)):
-    _require_role(user, _CAMPAIGN_ROLES | {"Sales Representative", "sales_rep"})
-    lead = storage.get("leads", _tenant(user), lead_id)
-    if lead is None:
-        raise HTTPException(404, "lead not found")
-    return {"status": "source_only", "enriched": False,
-            "detail": "No external enrichment provider is configured."}
 
 
 @router.post("/leads/{lead_id}/verify")

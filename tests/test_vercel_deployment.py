@@ -135,6 +135,7 @@ with TestClient(app) as client:
             env = os.environ.copy()
             env.update({
                 "PYTHON_DOTENV_DISABLED": "1",
+                "FINESSE_ENV": "production",
                 "VERCEL": "1",
                 "VERCEL_ENV": "production",
                 "CEO_EMAIL": "partial-config@example.test",
@@ -166,11 +167,8 @@ with TestClient(app) as client:
             result = subprocess.run(
                 [sys.executable, "-c", script], cwd=ROOT, env=env,
                 capture_output=True, text=True, timeout=120, check=False)
-            detail = next((line.strip() for line in reversed(result.stderr.splitlines())
-                           if line.strip().startswith((
-                               "AssertionError", "RuntimeError", "ValueError",
-                               "ModuleNotFoundError", "ImportError"))),
-                          "partial Vercel authentication setup test failed")
+            detail = result.stderr.strip()[-1600:] or (
+                "partial Vercel authentication setup test failed")
             self.assertEqual(result.returncode, 0, detail)
 
     def test_vercel_without_auth_secrets_returns_diagnostic_health_response(self):

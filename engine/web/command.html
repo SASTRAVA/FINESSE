@@ -284,9 +284,11 @@ async function loadAudit(){try{const {audit}=await api("/api/audit");
   $("audit").innerHTML=audit.map(a=>`<div class="aud">${new Date(a.ts*1000).toLocaleTimeString()} · ${a.actor} · <b>${a.tool}</b> → ${a.outcome}</div>`).join("")||"<div class='aud'>no activity</div>";}catch(e){}}
 async function reweave(){$("sysline").textContent="reweaving…";try{const r=await api("/api/reweave",{method:"POST"});
   alert("Graph reconnected:\n"+JSON.stringify(r.reweave,null,2));refresh();}catch(e){alert(e.message);}}
-function connectWS(){const proto=location.protocol==="https:"?"wss":"ws";
-  ws=new WebSocket(`${proto}://${location.host}/ws?token=${encodeURIComponent(TOKEN)}`);
-  ws.onmessage=ev=>addEvent(JSON.parse(ev.data));ws.onclose=()=>setTimeout(connectWS,2000);}
+async function connectWS(){try{const issued=await fetch("/api/ws-ticket",{method:"POST",headers:{"Authorization":"Bearer "+TOKEN}});
+  if(!issued.ok)throw new Error("live event ticket unavailable");const {ticket}=await issued.json();const proto=location.protocol==="https:"?"wss":"ws";
+  ws=new WebSocket(`${proto}://${location.host}/ws?ticket=${encodeURIComponent(ticket)}`);
+  ws.onmessage=ev=>addEvent(JSON.parse(ev.data));ws.onclose=()=>setTimeout(connectWS,2000);
+}catch(e){setTimeout(connectWS,5000);}}
 function addEvent(e){const f=$("feed");const d=document.createElement("div");d.className="ev "+(e.kind||"system");
   d.innerHTML=`<span class="a">${new Date(e.ts*1000).toLocaleTimeString()} · ${e.actor}</span><br>${esc(e.message)}`;
   f.prepend(d);while(f.children.length>100)f.removeChild(f.lastChild);

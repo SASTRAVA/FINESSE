@@ -46,6 +46,8 @@ jobs:
         run: npm audit --audit-level=moderate
       - name: Run unit and integration tests
         run: python -m pytest tests/ -v
+      - name: Verify route authentication inventory
+        run: python scripts/export_openapi.py --check
       - name: Run production contract suites
         run: python finesse_e2e_production_tests.py
       - name: Ruff lint
@@ -55,7 +57,17 @@ jobs:
           engine/auth/security.py engine/config.py engine/hub_api.py
           engine/orchestra/events.py engine/orchestra/jobs.py
           engine/orchestra/langgraph_conjunction.py engine/rag/store.py
-          engine/telemetry.py engine/main.py finesse_e2e_production_tests.py
+          engine/rag/retriever.py engine/rag/upload_validator.py
+          engine/security/ws_tickets.py engine/audit/pg_audit.py
+          engine/telemetry.py engine/main.py engine/auth/users.py
+          engine/sales/router_v1.py engine/sales/models.py
+          engine/portable/signatures.py scripts/export_openapi.py
+          scripts/migrate_users_json_to_postgres.py scripts/portable_safe_stop.py
+          finesse_e2e_production_tests.py tests/test_hash_chained_audit.py
+          tests/test_portable_signatures.py tests/test_portable_safe_stop.py
+          tests/test_rag_retriever.py tests/test_route_auth_matrix.py
+          tests/test_upload_validator.py tests/test_user_storage.py
+          tests/test_ws_tickets.py tests/test_vercel_deployment.py
       - name: Mypy critical boundary modules
         run: >-
           mypy --ignore-missing-imports --follow-imports=skip

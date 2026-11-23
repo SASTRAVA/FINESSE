@@ -392,8 +392,11 @@ async function injectFile(){const f=$("inj_file").files[0];if(!f){$("inj_msg").t
   const j=await r.json();$("inj_msg").style.color=r.ok?"var(--green)":"var(--red)";
   $("inj_msg").textContent=r.ok?`Indexed ${j.indexed.chunks} from ${f.name}.`:(j.detail||"error");refresh();}
 
-function connectWS(){const proto=location.protocol==="https:"?"wss":"ws";ws=new WebSocket(`${proto}://${location.host}/ws?token=${encodeURIComponent(TOKEN)}`);
-  ws.onmessage=ev=>{const e=JSON.parse(ev.data);if(window.FG&&window.FG.fireEvent)window.FG.fireEvent(e);ticker(e);};ws.onclose=()=>setTimeout(connectWS,2000);}
+async function connectWS(){try{const issued=await fetch("/api/ws-ticket",{method:"POST",headers:{"Authorization":"Bearer "+TOKEN}});
+  if(!issued.ok)throw new Error("live event ticket unavailable");const {ticket}=await issued.json();const proto=location.protocol==="https:"?"wss":"ws";
+  ws=new WebSocket(`${proto}://${location.host}/ws?ticket=${encodeURIComponent(ticket)}`);
+  ws.onmessage=ev=>{const e=JSON.parse(ev.data);if(window.FG&&window.FG.fireEvent)window.FG.fireEvent(e);ticker(e);};ws.onclose=()=>setTimeout(connectWS,2000);
+}catch(e){setTimeout(connectWS,5000);}}
 function ticker(e){const col=KC[e.kind]||'#7fe6ff';
   const html=`<div class="tk" style="border-left-color:${col}"><span class="a">${new Date(e.ts*1000).toLocaleTimeString()} · ${e.actor}</span><br>${esc(e.message)}</div>`;
   const t=$("ticker");t.insertAdjacentHTML("afterbegin",html);while(t.children.length>6)t.removeChild(t.lastChild);

@@ -17,6 +17,7 @@ TABLES = (
     "audit_logs", "gatekeeper_approvals", "scan_tasks", "scan_findings",
     "scan_evidence", "catalog_repositories",
     "tenant_secrets",
+    "ws_tickets",
 )
 
 
@@ -78,8 +79,21 @@ class PlatformStorage:
             if self._is_postgres:
                 from .migrations import apply_pending_migrations, verify_tenant_rls
                 apply_pending_migrations(self._connection)
-                verify_tenant_rls(self._connection, TABLES)
+                verify_tenant_rls(self._connection, TABLES + ("audit_events", "audit_heads"))
             if not self._is_postgres:
+                self._connection.executescript(
+                    "CREATE TABLE IF NOT EXISTS audit_events ("
+                    "tenant_id TEXT NOT NULL, sequence INTEGER NOT NULL, event_id TEXT NOT NULL, "
+                    "previous_hash TEXT NOT NULL, event_hash TEXT NOT NULL, payload_json TEXT NOT NULL, "
+                    "created_at REAL NOT NULL, PRIMARY KEY (tenant_id, sequence), "
+                    "UNIQUE (tenant_id, event_id));"
+                    "CREATE TABLE IF NOT EXISTS audit_heads ("
+                    "tenant_id TEXT PRIMARY KEY, sequence INTEGER NOT NULL, current_hash TEXT NOT NULL);"
+                    "CREATE TRIGGER IF NOT EXISTS audit_events_immutable_update "
+                    "BEFORE UPDATE ON audit_events BEGIN SELECT RAISE(ABORT, 'audit_events is append-only'); END;"
+                    "CREATE TRIGGER IF NOT EXISTS audit_events_immutable_delete "
+                    "BEFORE DELETE ON audit_events BEGIN SELECT RAISE(ABORT, 'audit_events is append-only'); END;"
+                )
                 self._connection.commit()
 
     def _sql(self, statement: str) -> str:
@@ -238,6 +252,34 @@ class PlatformStorage:
             cursor = connection.execute(self._sql(update),
                 (json.dumps(payload, separators=(",", ":")), now, tenant_id, record_id))
         return cursor.rowcount == 1
+
+    def take_once(self, table: str, tenant_id: str, record_id: str) -> dict | None:
+        """Atomically return and consume an unexpired ISSUED record."""
+        self._validate(table, tenant_id)
+        if table != "ws_tickets":
+            raise ValueError("single-use consumption is only supported for ws_tickets")
+        now = time.time()
+        with self.transaction(tenant_id) as connection:
+            query = f'SELECT data_json FROM "{table}" WHERE tenant_id=? AND record_id=?'
+            if self._is_postgres:
+                query += " FOR UPDATE"
+            row = connection.execute(self._sql(query), (tenant_id, record_id)).fetchone()
+            if row is None:
+                return None
+            payload = self._decode(row["data_json"])
+            if payload.get("status") != "ISSUED" or payload.get("expires_at", 0) <= now:
+                return None
+            payload["status"] = "CONSUMED"
+            payload["consumed_at"] = now
+            update = (f'UPDATE "{table}" SET data_json=?, updated_at=? '
+                      "WHERE tenant_id=? AND record_id=?")
+            if self._is_postgres:
+                update = update.replace("data_json=?", "data_json=?::jsonb")
+            cursor = connection.execute(self._sql(update),
+                (json.dumps(payload, separators=(",", ":")), now, tenant_id, record_id))
+            if cursor.rowcount != 1:
+                return None
+        return payload
 
     def close(self) -> None:
         if self._connection is None:

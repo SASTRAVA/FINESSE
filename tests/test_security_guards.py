@@ -12,6 +12,7 @@ from engine.auth import make_token
 from engine.config import cfg
 from engine.hub_api import hub_stream, map_idea
 from engine.rag.retriever import retriever
+from engine.security.ws_tickets import issue_ticket
 
 
 class _Socket:
@@ -57,8 +58,10 @@ class SecurityGuardTests(unittest.TestCase):
 
     def test_hub_stream_rejects_non_executive_token(self):
         socket = _Socket()
-        token = make_token("staff@example.com", "Software Engineer", 1)
-        asyncio.run(hub_stream(socket, token))
+        socket.headers = {"origin": cfg.CORS_ORIGINS[0]}
+        ticket = issue_ticket({"sub": "staff@example.com", "role": "Software Engineer",
+                               "tier": 1, "tenant_id": "default"})
+        asyncio.run(hub_stream(socket, ticket, "default"))
         self.assertEqual(socket.close_code, 4403)
 
     def test_innovation_cannot_run_without_lane_permissions(self):
@@ -72,7 +75,7 @@ class SecurityGuardTests(unittest.TestCase):
     def test_retrieval_queries_only_the_calling_lane_and_shared_memory(self):
         searched_roles = []
 
-        async def fake_search(query, limit, flt=None):
+        async def fake_search(query, limit, flt=None, tenant_id=None):
             role = flt["lane"]
             searched_roles.append(role)
             payload = {"role": role, "lane": role, "sensitivity": "internal",

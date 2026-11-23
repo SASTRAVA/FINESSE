@@ -242,12 +242,12 @@ async function handle(text){text=(text||'').trim();if(!text||busy)return;
 async function sendText(){const t=$('txt').value.trim();if(!t)return;$('txt').value='';ensureAudio();if(!TOKEN){$('login').style.display='grid';return;}handle(t);}
 
 /* ---------- feed ---------- */
-function connectWS(){try{ws=new WebSocket((location.protocol==='https:'?'wss':'ws')+'://'+location.host+'/ws?token='+encodeURIComponent(TOKEN));
+async function connectWS(){try{const issued=await fetch('/api/ws-ticket',{method:'POST',headers:{'Authorization':'Bearer '+TOKEN}});if(!issued.ok)throw new Error('ticket unavailable');const {ticket}=await issued.json();ws=new WebSocket((location.protocol==='https:'?'wss':'ws')+'://'+location.host+'/ws?ticket='+encodeURIComponent(ticket));
   ws.onmessage=m=>{const e=JSON.parse(m.data),c=KC[e.type]||'#7fe6ff';const d=document.createElement('div');d.className='ev';d.style.borderLeftColor=c;
     d.innerHTML=`<span class="a">${new Date(e.ts*1000).toLocaleTimeString()} · ${esc(e.actor||'')}</span><br>${esc(e.message||'')}`;
     $('events').appendChild(d);while($('events').children.length>60)$('events').removeChild($('events').firstChild);$('events').scrollTop=$('events').scrollHeight;
     if(e.type==='done'&&/directive complete/i.test(e.message||'')&&!speaking&&!busy&&Date.now()-lastAnnounce>15000){lastAnnounce=Date.now();speak('Sir, one of your directives just completed — the deliverable is ready in the vault.');}};
-  ws.onclose=()=>setTimeout(connectWS,3000);}catch(e){}}
+  ws.onclose=()=>setTimeout(connectWS,3000);}catch(e){setTimeout(connectWS,5000);}}
 
 /* ---------- overlays (Universe + Innovation Hub) ---------- */
 function openOv(src){const o=$('ov');o.innerHTML='<iframe src="'+src+'" title="ov"></iframe>';o.style.display='block';$('ovclose').style.display='block';}

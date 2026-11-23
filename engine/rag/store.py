@@ -117,7 +117,9 @@ class VectorStore:
                 raise ValueError("vector payload requires a recognized lane")
             if payload.get("sensitivity") not in allowed_sensitivity:
                 raise ValueError("vector payload requires a recognized sensitivity")
-            payload.setdefault("tenant_id", "default")
+            tenant_id = payload.get("tenant_id")
+            if not isinstance(tenant_id, str) or not tenant_id.strip():
+                raise ValueError("vector payload requires an explicit tenant_id")
             if payload.get("owner") and not payload.get("owner_sub"):
                 payload["owner_sub"] = payload["owner"]
         await self.init()
@@ -146,7 +148,9 @@ class VectorStore:
         return ids
 
     async def search(self, query: str, limit: int = 6, flt: Optional[dict] = None,
-                     sensitivity: str = "confidential", tenant_id: str = "default"):
+                     sensitivity: str = "confidential", tenant_id: str | None = None):
+        if not isinstance(tenant_id, str) or not tenant_id.strip():
+            raise ValueError("tenant_id is required for vector search")
         await self.init()
         qv = await embedder.embed_one(query, sensitivity=sensitivity)
         scoped_filter = dict(flt or {})

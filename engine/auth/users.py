@@ -11,7 +11,6 @@ import logging
 import re
 import time
 from dataclasses import dataclass, asdict, field
-from pathlib import Path
 from typing import Optional
 
 from ..config import cfg, vercel_missing_auth_environment
@@ -51,18 +50,29 @@ class User:
 
 
 class UserStore:
-    def __init__(self):
+    def __init__(self, repository=None):
         self._users: dict[str, User] = {}
+        self._repository = repository
+        if self._repository is None and cfg.DATABASE_URL.startswith(("postgres://", "postgresql://")):
+            from ..db.storage import storage
+            self._repository = storage
         self.load()
         self._bootstrap_ceo()
 
     # ---- persistence ----
     def load(self):
+        if self._repository is not None:
+            return
         if _DB.exists():
             data = json.loads(_DB.read_text(encoding="utf-8"))
             self._users = {e: User(**u) for e, u in data.items()}
 
     def save(self):
+        repository = getattr(self, "_repository", None)
+        if repository is not None:
+            for user in self._users.values():
+                repository.put("users", user.tenant_id, user.email, asdict(user))
+            return
         _DB.parent.mkdir(parents=True, exist_ok=True)
         _DB.write_text(json.dumps({e: asdict(u) for e, u in self._users.items()},
                                   indent=2), encoding="utf-8")
@@ -78,15 +88,35 @@ class UserStore:
             raise RuntimeError("Set JWT_SECRET to a random secret of at least 32 characters.")
         validate_password_strength(cfg.CEO_PASSWORD)
         email = cfg.CEO_EMAIL.lower()
-        if email not in self._users:
-            self._users[email] = User(
+        if self.get(email, "default") is None:
+            user = User(
                 email=email, name="CEO", role="CEO",
                 pw_hash=hash_pw(cfg.CEO_PASSWORD), tier=4)
-            self.save()
+            if self._repository is None:
+                self._users[email] = user
+                self.save()
+            else:
+                self._repository.put_if_absent("users", "default", email, asdict(user))
 
     # ---- ops ----
-    def get(self, email: str) -> Optional[User]:
-        return self._users.get(email.lower())
+    @staticmethod
+    def _cache_key(email: str, tenant_id: str) -> str:
+        return tenant_id + "\x00" + email.lower()
+
+    def get(self, email: str, tenant_id: str = "default") -> Optional[User]:
+        key = self._cache_key(email, tenant_id)
+        if key in self._users:
+            return self._users[key]
+        repository = getattr(self, "_repository", None)
+        if repository is None:
+            user = self._users.get(email.lower())
+            return user if user is None or user.tenant_id == tenant_id else None
+        record = repository.get("users", tenant_id, email.lower())
+        if record is None:
+            return None
+        user = User(**record)
+        self._users[key] = user
+        return user
 
     def create(self, email: str, name: str, role: str, password: str,
                tenant_id: str = "default") -> User:
@@ -95,40 +125,69 @@ class UserStore:
         if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,127}", tenant_id):
             raise ValueError("tenant_id must use lowercase letters, digits, hyphens, or underscores")
         email = email.lower()
-        if email in self._users:
+        if self.get(email, tenant_id) is not None:
+            raise ValueError("user exists")
+        repository = getattr(self, "_repository", None)
+        if repository is None and email in self._users:
             raise ValueError("user exists")
         r = role_of(role)
         if role == "CEO":
             raise ValueError("CEO is a singleton admin and cannot be created")
         u = User(email=email, name=name, role=role, pw_hash=hash_pw(password), tier=r.tier,
                  tenant_id=tenant_id)
-        self._users[email] = u
-        self.save()
+        if repository is None:
+            self._users[email] = u
+            self.save()
+        elif not repository.put_if_absent(
+                "users", tenant_id, email, asdict(u)):
+            raise ValueError("user exists")
         return u
 
-    def change_password(self, email: str, current_password: str, new_password: str) -> None:
+    def change_password(self, email: str, current_password: str, new_password: str,
+                        tenant_id: str = "default") -> None:
         validate_password_strength(new_password)
-        user = self.get(email)
+        user = self.get(email, tenant_id)
         if user is None or not verify_pw(current_password, user.pw_hash):
             raise ValueError("current password is incorrect")
         user.pw_hash = hash_pw(new_password)
-        self.save()
+        repository = getattr(self, "_repository", None)
+        if repository is None:
+            self.save()
+        else:
+            repository.put("users", user.tenant_id, user.email, asdict(user))
 
-    def authenticate(self, email: str, password: str) -> Optional[User]:
-        u = self.get(email)
+    def authenticate(self, email: str, password: str,
+                     tenant_id: str = "default") -> Optional[User]:
+        u = self.get(email, tenant_id)
         if u and verify_pw(password, u.pw_hash):
             u.usage["logins"] += 1
-            self.save()
+            repository = getattr(self, "_repository", None)
+            if repository is not None:
+                repository.put("users", u.tenant_id, u.email, asdict(u))
+            else:
+                self.save()
             return u
         return None
 
-    def bump(self, email: str, key: str, n: int = 1):
-        u = self.get(email)
+    def bump(self, email: str, key: str, n: int = 1,
+             tenant_id: str = "default"):
+        u = self.get(email, tenant_id)
         if u:
             u.usage[key] = u.usage.get(key, 0) + n
-            self.save()
+            repository = getattr(self, "_repository", None)
+            if repository is not None:
+                repository.put("users", u.tenant_id, u.email, asdict(u))
+            else:
+                self.save()
 
     def all_public(self, tenant_id: str | None = None) -> list[dict]:
+        repository = getattr(self, "_repository", None)
+        if repository is not None:
+            if tenant_id is None:
+                # PostgreSQL RLS intentionally prevents unscoped tenant roster reads.
+                return []
+            records = repository.list("users", tenant_id, limit=1000)
+            return [User(**record).public() for record in records]
         return [u.public() for u in self._users.values()
                 if tenant_id is None or u.tenant_id == tenant_id]
 

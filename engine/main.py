@@ -18,6 +18,7 @@ Routes
   WS   /ws                     -> live event stream for the dashboard
 """
 from __future__ import annotations
+import asyncio
 import uuid
 import ipaddress
 import re
@@ -37,6 +38,8 @@ from .config import (cfg, validate_runtime_security, vercel_missing_auth_environ
 from .auth import users, make_token, decode_token, role_of, can, ROLES
 from .auth.security import LoginThrottle
 from .rag import store, ingest_text, ingest_file
+from .rag.upload_validator import (MAX_UPLOAD_BYTES, UploadValidationError,
+                                   validate_upload)
 from .rag.embeddings import embedder
 from .llm import llm, turbo
 from .llm.provider import DataEgressBlocked
@@ -52,6 +55,8 @@ from .sastrava.workflows import (
 from . import crawler
 from .db.storage import storage
 from .security.toolchain import erasure_certificate
+from .security.ws_tickets import consume_ticket, issue_ticket
+from .audit.pg_audit import audit_log
 from .safety_state import activate_emergency_stop
 
 app = FastAPI(title="SASTRAVA FINESSE", version="0.1.0")
@@ -170,6 +175,7 @@ def require_tier(min_tier: int):
 class LoginIn(BaseModel):
     email: str = Field(min_length=3, max_length=320)
     password: str = Field(min_length=1, max_length=1024)
+    tenant_id: str = Field(default="default", pattern=r"^[a-z0-9][a-z0-9_-]{0,127}$")
 
 
 class ChangePasswordIn(BaseModel):
@@ -357,30 +363,49 @@ async def login(body: LoginIn):
     account = login_throttle.normalize_account(body.email)
     if not login_throttle.allowed(account=account):
         raise HTTPException(429, "too many login attempts for this account")
-    u = users.authenticate(body.email, body.password)
+    u = users.authenticate(body.email, body.password, body.tenant_id)
     if not u:
         login_throttle.failed(account=account)
         raise HTTPException(401, "bad credentials")
     login_throttle.succeeded(account=account)
     token = make_token(u.email, u.role, u.tier, u.tenant_id)
     await bus.emit("system", u.role, f"{u.name} logged in", lane=role_of(u.role).lane)
+    await asyncio.to_thread(audit_log.append, u.tenant_id,
+                            {"action": "login_success", "actor": u.email, "role": u.role})
     return {"token": token, "user": u.public()}
 
 
 @app.post("/api/auth/change-password")
 async def change_password(body: ChangePasswordIn, user: dict = Depends(current_user)):
     try:
-        users.change_password(user["sub"], body.current_password, body.new_password)
+        users.change_password(user["sub"], body.current_password, body.new_password,
+                              user.get("tenant_id", "default"))
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     await bus.emit("security", user.get("role", "unknown"), "password changed",
                    user=user["sub"])
+    await asyncio.to_thread(audit_log.append, user.get("tenant_id", "default"),
+                            {"action": "password_changed", "actor": user["sub"]})
     return {"changed": True}
+
+
+@app.post("/api/ws-ticket")
+async def create_ws_ticket(user: dict = Depends(current_user)):
+    """Mint a short-lived, single-use credential for the privileged event stream."""
+    if user.get("tier", 1) < 3 or user.get("tenant_id", "default") != "default":
+        raise HTTPException(403, "live event stream is restricted to default-tenant executives")
+    try:
+        ticket = issue_ticket(user)
+    except (RuntimeError, ValueError) as exc:
+        _logger.exception("Could not issue WebSocket ticket")
+        raise HTTPException(503, "WebSocket ticket service is unavailable") from exc
+    return {"ticket": ticket, "tenant_id": user.get("tenant_id", "default"),
+            "expires_in": 60}
 
 
 @app.get("/api/me")
 async def me(user: dict = Depends(current_user)):
-    u = users.get(user["sub"])
+    u = users.get(user["sub"], user.get("tenant_id", "default"))
     return {"email": user["sub"], "role": user["role"], "tier": user["tier"],
             "tenant_id": user.get("tenant_id", "default"),
             "lane": role_of(user["role"]).lane,
@@ -395,10 +420,16 @@ async def create_user(body: NewUserIn, user: dict = Depends(require("read:all"))
         raise HTTPException(403, "user administration is restricted to executives")
     if body.role not in ROLES:
         raise HTTPException(400, f"unknown role. valid: {list(ROLES)}")
+    tenant_id = user.get("tenant_id", "default")
+    if body.tenant_id != tenant_id:
+        raise HTTPException(403, "user administration cannot cross tenant boundaries")
     try:
-        u = users.create(body.email, body.name, body.role, body.password, body.tenant_id)
+        u = users.create(body.email, body.name, body.role, body.password, tenant_id)
     except ValueError as e:
         raise HTTPException(400, str(e))
+    await asyncio.to_thread(audit_log.append, tenant_id,
+                            {"action": "user_created", "actor": user["sub"],
+                             "subject": u.email, "role": u.role})
     return {"created": u.public()}
 
 
@@ -422,7 +453,7 @@ async def inject_text_route(body: InjectTextIn, user: dict = Depends(require("in
                             sensitivity=body.sensitivity,
                             injected_by=user["sub"], source="prompt",
                             tenant_id=user.get("tenant_id", "default"))
-    users.bump(user["sub"], "injections")
+    users.bump(user["sub"], "injections", tenant_id=user.get("tenant_id", "default"))
     return {"ok": True, "indexed": res}
 
 
@@ -432,25 +463,27 @@ async def inject_file_route(file: UploadFile = File(...),
                             user: dict = Depends(require("inject"))):
     if sensitivity not in {"public", "internal", "confidential", "restricted"}:
         raise HTTPException(422, "invalid sensitivity")
-    max_bytes = 10 * 1024 * 1024
     filename = (file.filename or "").replace("\\", "/")
-    suffix = Path(filename).suffix.lower()
-    if suffix not in {".pdf", ".docx", ".txt", ".md", ".csv", ".xlsx", ".xlsm"}:
-        raise HTTPException(415, "unsupported file type")
-    content = await file.read(max_bytes + 1)
-    if len(content) > max_bytes:
-        raise HTTPException(413, "file exceeds the 10 MiB upload limit")
-    dest = cfg.UPLOADS / f"{uuid.uuid4().hex}{suffix}"
     try:
-        dest.write_bytes(content)
+        content = await file.read(MAX_UPLOAD_BYTES + 1)
+        try:
+            suffix = validate_upload(filename, content)
+        except UploadValidationError as exc:
+            status = 413 if "limit" in str(exc) or "expands" in str(exc) else 415
+            raise HTTPException(status, str(exc)) from exc
+        dest = cfg.UPLOADS / f"{uuid.uuid4().hex}{suffix}"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        with dest.open("xb") as output:
+            output.write(content)
         res = await ingest_file(dest, role=role_of(user["role"]).lane,
                                 lane=role_of(user["role"]).lane,
                                 sensitivity=sensitivity, injected_by=user["sub"],
                                 tenant_id=user.get("tenant_id", "default"))
-        users.bump(user["sub"], "injections")
+        users.bump(user["sub"], "injections", tenant_id=user.get("tenant_id", "default"))
         return {"ok": True, "indexed": res}
     finally:
-        dest.unlink(missing_ok=True)
+        if "dest" in locals():
+            dest.unlink(missing_ok=True)
         await file.close()
 
 
@@ -465,7 +498,7 @@ async def directive_route(body: DirectiveIn, user: dict = Depends(current_user))
         body.directive, user_email=user["sub"], user_role=user["role"],
         preferred_agents=body.agents, all_agents=body.all_agents,
         sensitivity=body.sensitivity, tenant_id=user.get("tenant_id", "default"))
-    users.bump(user["sub"], "directives")
+    users.bump(user["sub"], "directives", tenant_id=user.get("tenant_id", "default"))
     return result
 
 
@@ -480,7 +513,7 @@ async def agent_run_route(body: AgentRunIn, user: dict = Depends(current_user)):
         raise HTTPException(404, str(e))
     except PermissionError as e:
         raise HTTPException(403, str(e))
-    users.bump(user["sub"], "directives")
+    users.bump(user["sub"], "directives", tenant_id=user.get("tenant_id", "default"))
     return result
 
 
@@ -534,7 +567,7 @@ async def voice_route(body: VoiceIn, user: dict = Depends(current_user)):
     result = await route(text, user, history_txt, sensitivity=body.sensitivity)
     hist.append(("Sir", text))
     hist.append(("JARVIS", result["speech"]))
-    users.bump(user["sub"], "directives")
+    users.bump(user["sub"], "directives", tenant_id=user.get("tenant_id", "default"))
     return {"speech": result["speech"], "launched": result.get("launched", False),
             "action": result.get("action", "chat"), "voice": cfg.voice_provider,
             "sensitivity": result.get("sensitivity", body.sensitivity)}
@@ -917,7 +950,7 @@ async def _run_sastrava_workflow(*, user: dict, service_line: str, brief: str,
         directive, user_email=user["sub"], user_role=user["role"],
         preferred_agents=[service["agent"]], sensitivity=sensitivity, consulting=True,
         tenant_id=user.get("tenant_id", "default"))
-    users.bump(user["sub"], "directives")
+    users.bump(user["sub"], "directives", tenant_id=user.get("tenant_id", "default"))
     return {"service_line": service_line, "method": "Listen → Shape → Deliver", **result}
 
 
@@ -1007,8 +1040,12 @@ async def status_route(user: dict = Depends(current_user)):
 
 # ---------- live feed ----------
 @app.websocket("/ws")
-async def ws(websocket: WebSocket, token: str = ""):
-    payload = decode_token(token)
+async def ws(websocket: WebSocket, ticket: str = ""):
+    origin = websocket.headers.get("origin", "")
+    if not origin or origin not in cfg.CORS_ORIGINS:
+        await websocket.close(code=4403)
+        return
+    payload = consume_ticket(ticket)
     if not payload:
         await websocket.close(code=4401)
         return
@@ -1135,7 +1172,7 @@ async def command_overview(user: dict = Depends(require_tier(3))):
                    "embed": embedder.backend, "brain_vectors": await store.count(),
                    "agents": len(registry.all()), "tools": len(mcp.all())},
         "crm": crm.stats(),
-        "users": len(users.all_public()),
+        "users": len(users.all_public(user.get("tenant_id", "default"))),
         "turboquant": turbo.stats(),
         "crawler": {"enabled": cfg.CRAWLER_ENABLED, "reweave_min": cfg.REWEAVE_INTERVAL_MIN},
     }

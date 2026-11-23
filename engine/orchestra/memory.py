@@ -42,7 +42,7 @@ class SharedMemory:
         memory_lane = lane or role_of(role).lane
         similar = await store.search(
             pattern, limit=3, flt={"source": "memory", "owner": owner, "lane": memory_lane,
-                                  "tenant_id": tenant_id})
+                                  "tenant_id": tenant_id}, tenant_id=tenant_id)
         prior = max((p.get("confidence", 0.0) for _, p in similar
                      if p.get("kind") == "pattern"), default=0.0)
         conf = ({0.0: 0.6, 0.6: 0.75, 0.75: 0.9, 0.9: 0.95}.get(

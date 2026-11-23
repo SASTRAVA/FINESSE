@@ -379,7 +379,7 @@ class OptInProviderIntegrationTests(unittest.TestCase):
                          "X-Twilio-Signature": status_signature})
         self.assertEqual(status_response.status_code, 200)
 
-        contact_id = "twilio-opt-out-contact"
+        contact_id = "twilio-opt-out-contact-" + uuid.uuid4().hex
         optout_url = build_voice_callback_url(
             twilio_url, tenant_id="default", suffix="/opt-out", contact_id=contact_id)
         optout_params = [("CallSid", "CA123"), ("SpeechResult", "please stop")]
