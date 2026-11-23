@@ -410,6 +410,11 @@ Docker Engine still stores image layers and host logs on the host computer.
 
 ## Main components
 
+Explore the repository with these generated views:
+
+- [Interactive architecture diagram](https://gitdiagram.com/sastrava/finesse)
+- [AI-readable repository digest](https://gitingest.com/sastrava/finesse)
+
 | Path | Purpose |
 | --- | --- |
 | `engine/main.py` | FastAPI endpoints, authentication, uploads, WebSocket |
