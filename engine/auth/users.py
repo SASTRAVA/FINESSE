@@ -14,7 +14,7 @@ from dataclasses import dataclass, asdict, field
 from typing import Optional
 
 from ..config import cfg, vercel_missing_auth_environment
-from .rbac import role_of
+from .rbac import ROLES, role_of
 from .security import hash_pw, verify_pw
 
 _DB = cfg.DATA / "users.json"
@@ -38,6 +38,8 @@ class User:
     pw_hash: str
     tier: int = 1
     tenant_id: str = "default"
+    active: bool = True
+    external_subject: str | None = None
     created: float = field(default_factory=time.time)
     usage: dict = field(default_factory=lambda: {"logins": 0, "directives": 0,
                                                   "injections": 0, "tokens_est": 0})
@@ -159,7 +161,7 @@ class UserStore:
     def authenticate(self, email: str, password: str,
                      tenant_id: str = "default") -> Optional[User]:
         u = self.get(email, tenant_id)
-        if u and verify_pw(password, u.pw_hash):
+        if u and u.active and verify_pw(password, u.pw_hash):
             u.usage["logins"] += 1
             repository = getattr(self, "_repository", None)
             if repository is not None:
@@ -168,6 +170,33 @@ class UserStore:
                 self.save()
             return u
         return None
+
+    def set_active(self, email: str, tenant_id: str, active: bool) -> User:
+        user = self.get(email, tenant_id)
+        if user is None:
+            raise ValueError("user not found")
+        if user.role == "CEO" and not active:
+            raise ValueError("the tenant CEO account cannot be deprovisioned")
+        user.active = bool(active)
+        self._save_user(user)
+        return user
+
+    def set_role(self, email: str, tenant_id: str, role: str) -> User:
+        if role not in ROLES or role == "CEO":
+            raise ValueError("unknown or reserved SCIM role")
+        user = self.get(email, tenant_id)
+        if user is None:
+            raise ValueError("user not found")
+        user.role = role
+        user.tier = role_of(role).tier
+        self._save_user(user)
+        return user
+
+    def _save_user(self, user: User) -> None:
+        if self._repository is None:
+            self.save()
+        else:
+            self._repository.put("users", user.tenant_id, user.email, asdict(user))
 
     def bump(self, email: str, key: str, n: int = 1,
              tenant_id: str = "default"):

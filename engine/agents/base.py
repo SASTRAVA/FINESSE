@@ -9,6 +9,7 @@ memory, bus), so spawning a thousand agents costs almost nothing until they run.
 from __future__ import annotations
 import time
 import uuid
+import hashlib
 from dataclasses import dataclass, field
 
 from ..llm import llm
@@ -27,6 +28,8 @@ class AgentResult:
     steps: int = 1
     sensitivity: str = "internal"
     tainted: bool = False
+    citations: list[dict] = field(default_factory=list)
+    unverified_citation_warnings: list[str] = field(default_factory=list)
 
 
 _AGENTIC_PREAMBLE = (
@@ -78,10 +81,22 @@ class Agent:
         await bus.emit("think", self.id, "retrieved brain context, planning…", trace=self.trace)
 
         system = self.spec.system_prompt + _UNTRUSTED_RULE
+        from ..llm.prompt_registry import prompt_registry
+        prompt_version = prompt_registry.resolve(self.spec.key, tenant_id=tenant_id)
+        if prompt_version is None:
+            prompt_version = prompt_registry.register(
+                self.spec.key, "1.0.0", self.spec.system_prompt, created_by="builtin")
+            prompt_registry.activate(self.spec.key, prompt_version.version_semver)
+        system = prompt_version.system_prompt + _UNTRUSTED_RULE
         if self.spec.agentic:
             system += _AGENTIC_PREAMBLE
+        acl_scope_hash = hashlib.sha256((user_id + "|" + "|".join(sorted(
+            str(citation.get("doc_id") or "") for citation in ctx_info["citations"]
+        ))).encode("utf-8")).hexdigest()
         user = (f"# Task\n{task}\n\n"
                 f"# Relevant brain context (retrieved)\n{ctx}\n"
+                "Ground factual claims in this context with its [C#] references. "
+                "Do not create citation identifiers that were not provided.\n"
                 f"{('# Additional context\n' + extra_context) if extra_context else ''}\n\n"
                 f"Act as the {self.spec.title}. Be concrete and production-grade.")
 
@@ -112,7 +127,10 @@ class Agent:
                 system, user, role=self.spec.model_role, tool_schemas=tool_schemas,
                 dispatch=_dispatch, on_step=_on_step, temperature=self.spec.temperature,
                 max_tokens=self.spec.max_tokens, max_steps=cfg.AGENTIC_MAX_STEPS,
-                lane=self.spec.lane, sensitivity=ctx_info["sensitivity"])
+                lane=self.spec.lane, sensitivity=ctx_info["sensitivity"],
+                tenant_id=tenant_id, user_id=user_id or "anonymous",
+                prompt_version=prompt_version.version_semver,
+                acl_scope_hash=acl_scope_hash)
             # self-reflection pass (Claude-style critique + improve)
             if cfg.AGENTIC_REFLECT and self.spec.learns:
                 await bus.emit("think", self.id, "reflecting & self-critiquing draft…",
@@ -125,7 +143,10 @@ class Agent:
             output = await llm.chat(system, user, role=self.spec.model_role,
                                     temperature=self.spec.temperature,
                                     max_tokens=self.spec.max_tokens,
-                                    sensitivity=ctx_info["sensitivity"])
+                                    sensitivity=ctx_info["sensitivity"], lane=self.spec.lane,
+                                    tenant_id=tenant_id,
+                                    prompt_version=prompt_version.version_semver,
+                                    acl_scope_hash=acl_scope_hash, user_id=user_id or "anonymous")
 
         elapsed = time.time() - t0
         await bus.emit("done", self.id,
@@ -141,6 +162,11 @@ class Agent:
                 user_id=user_id, lane=self.spec.lane, tainted=tainted,
                 sensitivity=ctx_info["sensitivity"], tenant_id=tenant_id)
 
-        return AgentResult(self.id, self.spec.key, output, elapsed,
+        from ..rag.citations import verify_and_attach_citations
+        citation_result = verify_and_attach_citations(output, ctx_info["citations"])
+        return AgentResult(self.id, self.spec.key, citation_result["answer_markdown"], elapsed,
                            self.spec.base_confidence, steps=steps,
-                           sensitivity=ctx_info["sensitivity"], tainted=tainted)
+                           sensitivity=ctx_info["sensitivity"], tainted=tainted,
+                           citations=citation_result["citations"],
+                           unverified_citation_warnings=citation_result[
+                               "unverified_citation_warnings"])

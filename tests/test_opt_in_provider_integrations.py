@@ -316,7 +316,7 @@ class OptInProviderIntegrationTests(unittest.TestCase):
 
         client = TestClient(main.app)
         tenant_id = "default"
-        headers = {"Authorization": f"Bearer {make_token('ops@example.test', 'CEO', 4, tenant_id)}"}
+        headers = {"Authorization": f"Bearer {make_token('ops@example.test', 'CEO', 4, tenant_id, amr=('pwd', 'mfa'))}"}
         secret = "w" * 48
         payload = {"tenant_id": tenant_id, "event_id": "event-" + uuid.uuid4().hex,
                    "event": "unsubscribe", "contact_id": "contact-123",
@@ -428,7 +428,7 @@ class OptInProviderIntegrationTests(unittest.TestCase):
 
         client = TestClient(main.app)
         tenant_id = "tenant-email-policy-" + uuid.uuid4().hex[:8]
-        headers = {"Authorization": f"Bearer {make_token('ops@example.test', 'CEO', 4, tenant_id)}"}
+        headers = {"Authorization": f"Bearer {make_token('ops@example.test', 'CEO', 4, tenant_id, amr=('pwd', 'mfa'))}"}
         lead_id = "lead-" + uuid.uuid4().hex[:10]
         storage.put("leads", tenant_id, lead_id, {
             "id": lead_id, "email": "contact@example.test", "eligible_for_outreach": False,
@@ -449,7 +449,7 @@ class OptInProviderIntegrationTests(unittest.TestCase):
 
         client = TestClient(main.app)
         tenant_id = "tenant-approved-outreach-" + uuid.uuid4().hex[:8]
-        headers = {"Authorization": f"Bearer {make_token('ops@example.test', 'CEO', 4, tenant_id)}"}
+        headers = {"Authorization": f"Bearer {make_token('ops@example.test', 'CEO', 4, tenant_id, amr=('pwd', 'mfa'))}"}
         lead_id = "lead-" + uuid.uuid4().hex[:10]
         storage.put("leads", tenant_id, lead_id, {
             "id": lead_id, "email": "contact@example.test", "phone": "+15551234567",
@@ -500,7 +500,7 @@ class OptInProviderIntegrationTests(unittest.TestCase):
 
         client = TestClient(main.app)
         tenant_id = "tenant-secret-route"
-        headers = {"Authorization": f"Bearer {make_token('ceo@example.test', 'CEO', 4, tenant_id)}"}
+        headers = {"Authorization": f"Bearer {make_token('ceo@example.test', 'CEO', 4, tenant_id, amr=('pwd', 'mfa'))}"}
         with patch.object(cfg, "KMS_MASTER_KEY", "K" * 48):
             response = client.put("/api/v1/settings/provider-secrets", headers=headers, json={
                 "name": "smtp_password", "secret": "not-returned-in-api-response"})

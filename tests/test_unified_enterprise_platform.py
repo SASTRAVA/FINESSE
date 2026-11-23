@@ -331,7 +331,7 @@ class UnifiedEnterpriseFoundationTests(unittest.TestCase):
 
         client = TestClient(main.app)
         sales_token = make_token("sales@example.test", "Sales Manager", 2)
-        ceo_token = make_token("ceo@example.test", "CEO", 4)
+        ceo_token = make_token("ceo@example.test", "CEO", 4, amr=("pwd", "mfa"))
         sales_headers = {"Authorization": f"Bearer {sales_token}"}
         ceo_headers = {"Authorization": f"Bearer {ceo_token}"}
         generated = client.post("/api/v1/leads/generate", headers=sales_headers, json={

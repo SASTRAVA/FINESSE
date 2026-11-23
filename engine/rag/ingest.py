@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import List
 
 from ..config import cfg
-from .store import store
+from .store import store  # noqa: F401 - retained as a patchable compatibility seam
 
 
 def chunk_text(text: str, size: int = 900, overlap: int = 150) -> List[str]:
@@ -99,16 +99,28 @@ def _read_any(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="ignore")
 
 
-async def _store_chunks(chunks: List[str], meta: dict) -> dict:
-    payloads = [{**meta, "chunk": i, "n_chunks": len(chunks)} for i in range(len(chunks))]
-    ids = await store.upsert(chunks, payloads)
-    return {"chunks": len(chunks), "ids": ids, **meta}
+async def _store_chunks(chunks: List[str], meta: dict, full_text: str) -> dict:
+    from .doc_lifecycle import document_lifecycle
+    source_type = ("OBSIDIAN" if meta.get("source") == "vault" else
+                   "GDRIVE" if meta.get("source") == "gdrive" else
+                   "SHAREPOINT" if meta.get("source") == "sharepoint" else "UPLOAD")
+    document = await document_lifecycle.index(
+        full_text, chunks, tenant_id=meta["tenant_id"], source_type=source_type,
+        source_label=meta.get("source"), external_id=meta.get("external_id", meta["title"]),
+        title=meta["title"], lane=meta["lane"], sensitivity=meta["sensitivity"],
+        actor=meta.get("injected_by", ""),
+        acl_principal_ids=(meta.get("acl_principal_ids") or
+                           ([meta["owner"]] if meta.get("owner") else None)))
+    return {"chunks": len(chunks), "ids": document.get("point_ids", []),
+            "doc_id": document["doc_id"], "version": document["current_version"], **meta}
 
 
 async def ingest_text(text: str, *, title: str, role: str, injected_by: str,
                       source: str = "prompt", lane: str | None = None,
                       sensitivity: str | None = None,
-                      tenant_id: str = "default") -> dict:
+                      tenant_id: str = "default",
+                      acl_principal_ids: list[str] | None = None,
+                      external_id: str | None = None) -> dict:
     """Ingest raw text / a pasted requirement / a prompt (human-typed)."""
     from ..auth.rbac import SENSITIVITY_LEVELS, role_of
     document_lane = lane or role
@@ -124,9 +136,13 @@ async def ingest_text(text: str, *, title: str, role: str, injected_by: str,
     meta = {"title": title, "role": document_lane, "lane": document_lane,
             "sensitivity": sensitivity, "injected_by": injected_by,
             "source": source, "tenant_id": tenant_id, "ts": time.time()}
+    if acl_principal_ids is not None:
+        meta["acl_principal_ids"] = list(acl_principal_ids)
+    if external_id is not None:
+        meta["external_id"] = external_id
     if source not in {"crawl", "skill_harvest", "vault"}:
         meta["owner"] = injected_by
-    result = await _store_chunks(chunks, meta)
+    result = await _store_chunks(chunks, meta, text)
     await asyncio.to_thread(_mirror_to_vault, title, text, meta)   # sync file write off the loop
     return result
 

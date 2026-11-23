@@ -48,7 +48,7 @@ class WebSocketTicketTests(unittest.TestCase):
 
     def test_ws_route_rejects_disallowed_origin_before_accepting(self):
         with TestClient(app) as client:
-            token = make_token("ceo", "CEO", 4, "default")
+            token = make_token("ceo", "CEO", 4, "default", amr=("pwd", "mfa"))
             response = client.post("/api/ws-ticket", headers={"Authorization": f"Bearer {token}"})
             self.assertEqual(response.status_code, 200)
             with self.assertRaises(WebSocketDisconnect) as error:
@@ -61,7 +61,7 @@ class WebSocketTicketTests(unittest.TestCase):
 
     def test_ws_route_consumes_ticket_and_rejects_replay(self):
         with TestClient(app) as client:
-            token = make_token("ceo", "CEO", 4, "default")
+            token = make_token("ceo", "CEO", 4, "default", amr=("pwd", "mfa"))
             response = client.post("/api/ws-ticket", headers={"Authorization": f"Bearer {token}"})
             self.assertEqual(response.status_code, 200)
             ticket = response.json()["ticket"]

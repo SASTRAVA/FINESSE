@@ -50,16 +50,23 @@ class TurboQuant:
         self.misses = 0
 
     @staticmethod
-    def key(model: str, prompt: str, temperature: float) -> str:
-        h = hashlib.sha256(f"{model}|{temperature:.2f}|{prompt}".encode()).hexdigest()
+    def key(model: str, prompt: str, temperature: float, *, tenant_id: str = "default",
+            lane: str = "", sensitivity: str = "internal", prompt_version: str = "builtin",
+            acl_scope_hash: str = "") -> str:
+        scope = "|".join((tenant_id, lane, sensitivity, prompt_version, acl_scope_hash))
+        h = hashlib.sha256(f"{model}|{temperature:.2f}|{scope}|{prompt}".encode()).hexdigest()
         return h[:32]
 
     async def run(self, model: str, prompt: str, temperature: float,
-                  call: Callable[[], Awaitable[str]]) -> str:
+                  call: Callable[[], Awaitable[str]], *, tenant_id: str = "default",
+                  lane: str = "", sensitivity: str = "internal",
+                  prompt_version: str = "builtin", acl_scope_hash: str = "") -> str:
         """Cache + single-flight + concurrency-bounded execution of one LLM call."""
         # caching only makes sense for near-deterministic calls
         cacheable = temperature <= 0.2
-        k = self.key(model, prompt, temperature)
+        k = self.key(model, prompt, temperature, tenant_id=tenant_id, lane=lane,
+                     sensitivity=sensitivity, prompt_version=prompt_version,
+                     acl_scope_hash=acl_scope_hash)
 
         if cacheable:
             hit = self._cache.get(k)

@@ -9,6 +9,7 @@ stored text is returned to a caller.
 from __future__ import annotations
 import uuid
 import math
+import re
 from typing import List, Optional
 
 from ..config import cfg
@@ -33,7 +34,19 @@ class _MemoryBackend:
             return dot / (na * nb)
         cand = self._pts
         if flt:
-            cand = [x for x in cand if all(x[2].get(k) == v for k, v in flt.items())]
+            exact = {key: value for key, value in flt.items()
+                     if key not in {"sensitivity_allowed", "acl_principal_ids",
+                                    "is_active"}}
+            cand = [x for x in cand if all(x[2].get(k) == v for k, v in exact.items())]
+            if flt.get("sensitivity_allowed"):
+                allowed = set(flt["sensitivity_allowed"])
+                cand = [x for x in cand if x[2].get("sensitivity") in allowed]
+            if flt.get("is_active") is True:
+                cand = [x for x in cand if x[2].get("is_active", True) is True]
+            if "acl_principal_ids" in flt:
+                principals = set(flt["acl_principal_ids"])
+                cand = [x for x in cand if not x[2].get("acl_restricted", False)
+                        or bool(principals.intersection(x[2].get("acl_principal_ids", [])))]
         scored = sorted(((cos(vec, v), p) for _, v, p in cand), key=lambda t: -t[0])
         return [(s, p) for s, p in scored[:limit]]
 
@@ -65,6 +78,7 @@ class VectorStore:
         self._client = None
         self._mem: Optional[_MemoryBackend] = None
         self._ready = False
+        self._hybrid = False
 
     async def init(self):
         if self._ready:
@@ -78,7 +92,38 @@ class VectorStore:
             else:
                 self._client = AsyncQdrantClient(path=cfg.QDRANT_PATH)
             existing = [c.name for c in (await self._client.get_collections()).collections]
-            if self.name not in existing:
+            if cfg.QDRANT_HYBRID_ENABLED:
+                if not cfg.QDRANT_URL:
+                    raise RuntimeError("native hybrid search requires a remote Qdrant service")
+                if cfg.QDRANT_FUSION not in {"RRF", "DBSF"}:
+                    raise RuntimeError("QDRANT_FUSION must be RRF or DBSF")
+                info = await self._client.info()
+                version = getattr(info, "version", "")
+                parts = tuple(int(part) for part in re.findall(r"\d+", version)[:3])
+                if parts < (1, 15, 3):
+                    raise RuntimeError("native hybrid search requires Qdrant 1.15.3 or newer")
+                if self.name not in existing:
+                    from qdrant_client.models import Modifier, SparseVectorParams
+                    await self._client.create_collection(
+                        self.name,
+                        vectors_config={"dense": VectorParams(
+                            size=embedder.dim, distance=Distance.COSINE)},
+                        sparse_vectors_config={"bm25": SparseVectorParams(
+                            modifier=Modifier.IDF)},
+                    )
+                else:
+                    collection = await self._client.get_collection(self.name)
+                    configured = collection.config.params.vectors
+                    if not isinstance(configured, dict) or "dense" not in configured:
+                        raise RuntimeError(
+                            "existing collection uses unnamed vectors; set a new "
+                            "QDRANT_COLLECTION and reindex before enabling hybrid mode")
+                    sparse = collection.config.params.sparse_vectors or {}
+                    if "bm25" not in sparse:
+                        raise RuntimeError(
+                            "existing collection has no bm25 sparse vector; migrate/reindex first")
+                self._hybrid = True
+            elif self.name not in existing:
                 await self._client.create_collection(
                     self.name,
                     vectors_config=VectorParams(size=embedder.dim, distance=Distance.COSINE),
@@ -95,8 +140,21 @@ class VectorStore:
                     # Qdrant returns 409 when an identical index already exists.
                     if getattr(exc, "status_code", None) != 409:
                         raise
+            for field_name, field_schema in (
+                    ("is_active", PayloadSchemaType.BOOL),
+                    ("acl_restricted", PayloadSchemaType.BOOL),
+                    ("acl_principal_ids", PayloadSchemaType.KEYWORD),
+                    ("doc_id", PayloadSchemaType.KEYWORD)):
+                try:
+                    await self._client.create_payload_index(
+                        collection_name=self.name, field_name=field_name,
+                        field_schema=field_schema, wait=True)
+                except Exception as exc:  # noqa: BLE001
+                    if getattr(exc, "status_code", None) != 409:
+                        raise
+            await self._backfill_security_payloads()
         except Exception as e:  # noqa: BLE001
-            if cfg.ENV == "production" and cfg.QDRANT_URL:
+            if (cfg.ENV == "production" and cfg.QDRANT_URL) or cfg.QDRANT_HYBRID_ENABLED:
                 raise RuntimeError("configured production Qdrant is unavailable") from e
             print(f"[store] Qdrant unavailable ({e}); using in-memory backend")
             self._client = None
@@ -122,6 +180,19 @@ class VectorStore:
                 raise ValueError("vector payload requires an explicit tenant_id")
             if payload.get("owner") and not payload.get("owner_sub"):
                 payload["owner_sub"] = payload["owner"]
+            payload.setdefault("is_active", True)
+            payload.setdefault("acl_principal_ids", [])
+            if not isinstance(payload["acl_principal_ids"], list):
+                raise ValueError("acl_principal_ids must be a list")
+            owner_scoped = payload.get("source") in {
+                "memory", "vault_injected", "prompt", "hub_idea", "pdf", "docx",
+                "txt", "md", "csv", "xlsx", "xlsm", "file"}
+            if owner_scoped and payload.get("owner"):
+                payload.setdefault("acl_restricted", True)
+                payload["acl_principal_ids"] = list(set(
+                    payload["acl_principal_ids"] + [payload["owner"]]))
+            else:
+                payload.setdefault("acl_restricted", False)
         await self.init()
         vecs: list[list[float] | None] = [None] * len(texts)
         positions_by_sensitivity: dict[str, list[int]] = {}
@@ -140,8 +211,18 @@ class VectorStore:
             p.setdefault("text", t)
         if self._client is not None:
             from qdrant_client.models import PointStruct
-            pts = [PointStruct(id=i, vector=v, payload=p)
-                   for i, v, p in zip(ids, complete_vecs, payloads)]
+            if self._hybrid:
+                from qdrant_client.models import Document
+                pts = [PointStruct(
+                    id=point_id,
+                    vector={"dense": vector,
+                            "bm25": Document(text=text, model="Qdrant/bm25")},
+                    payload=payload,
+                ) for point_id, vector, text, payload
+                    in zip(ids, complete_vecs, texts, payloads)]
+            else:
+                pts = [PointStruct(id=i, vector=v, payload=p)
+                       for i, v, p in zip(ids, complete_vecs, payloads)]
             await self._client.upsert(self.name, points=pts)
         else:
             self._mem.upsert(ids, complete_vecs, payloads)
@@ -156,15 +237,123 @@ class VectorStore:
         scoped_filter = dict(flt or {})
         scoped_filter["tenant_id"] = tenant_id
         if self._client is not None:
-            from qdrant_client.models import Filter, FieldCondition, MatchValue
-            qfilter = None
-            if scoped_filter:
-                qfilter = Filter(must=[FieldCondition(key=k, match=MatchValue(value=v))
-                                       for k, v in scoped_filter.items()])
+            from qdrant_client.models import (
+                Filter, FieldCondition, MatchAny, MatchValue, MinShould,
+            )
+            exact = {key: value for key, value in scoped_filter.items()
+                     if key not in {"sensitivity_allowed", "acl_principal_ids", "is_active"}}
+            must = [FieldCondition(key=k, match=MatchValue(value=v))
+                    for k, v in exact.items()]
+            if scoped_filter.get("sensitivity_allowed"):
+                must.append(FieldCondition(
+                    key="sensitivity", match=MatchAny(any=scoped_filter["sensitivity_allowed"])))
+            if scoped_filter.get("is_active") is True:
+                must.append(FieldCondition(key="is_active", match=MatchValue(value=True)))
+            conditions = [FieldCondition(key="acl_restricted", match=MatchValue(value=False))]
+            principals = scoped_filter.get("acl_principal_ids", [])
+            if principals:
+                conditions.append(FieldCondition(
+                    key="acl_principal_ids", match=MatchAny(any=principals)))
+            qfilter = Filter(must=must, min_should=MinShould(min_count=1, conditions=conditions))
+            if self._hybrid:
+                from qdrant_client.models import Document, Fusion, FusionQuery, Prefetch
+                fusion = (Fusion.RRF if cfg.QDRANT_FUSION == "RRF" else Fusion.DBSF)
+                candidate_limit = max(50, limit)
+                res = await self._client.query_points(
+                    collection_name=self.name,
+                    prefetch=[
+                        Prefetch(query=qv, using="dense", limit=candidate_limit,
+                                 filter=qfilter),
+                        Prefetch(query=Document(text=query, model="Qdrant/bm25"),
+                                 using="bm25", limit=candidate_limit, filter=qfilter),
+                    ],
+                    query=FusionQuery(fusion=fusion), query_filter=qfilter,
+                    limit=limit, with_payload=True,
+                )
+                return [(point.score, point.payload or {}) for point in res.points]
             res = await self._client.search(self.name, query_vector=qv, limit=limit,
                                             query_filter=qfilter)
             return [(r.score, r.payload) for r in res]
         return self._mem.search(qv, limit, scoped_filter)
+
+    async def _backfill_security_payloads(self) -> None:
+        """Give legacy points safe active and owner ACL defaults before querying them."""
+        if self._client is None:
+            return
+        from qdrant_client.models import PointIdsList
+        owner_scoped = {"memory", "vault_injected", "prompt", "hub_idea", "pdf", "docx",
+                        "txt", "md", "csv", "xlsx", "xlsm", "file"}
+        offset = None
+        while True:
+            points, offset = await self._client.scroll(
+                collection_name=self.name, limit=256, offset=offset,
+                with_payload=True, with_vectors=False)
+            for point in points:
+                payload = point.payload or {}
+                updates = {}
+                if "is_active" not in payload:
+                    updates["is_active"] = True
+                if "acl_restricted" not in payload:
+                    owner = payload.get("owner") or payload.get("injected_by")
+                    restricted = payload.get("source") in owner_scoped and bool(owner)
+                    updates["acl_restricted"] = restricted
+                    updates["acl_principal_ids"] = [owner] if restricted else []
+                if updates:
+                    await self._client.set_payload(
+                        collection_name=self.name, payload=updates,
+                        points=PointIdsList(points=[point.id]), wait=True)
+            if offset is None:
+                break
+
+    async def deactivate_points(self, point_ids: list[str | int]) -> None:
+        """Immediately remove old document versions from searchable results."""
+        if not point_ids:
+            return
+        await self.init()
+        if self._client is None:
+            selected = set(point_ids)
+            for index, (point_id, vector, payload) in enumerate(self._mem._pts):
+                if point_id in selected:
+                    self._mem._pts[index] = (point_id, vector, {**payload, "is_active": False})
+            return
+        from qdrant_client.models import PointIdsList
+        for offset in range(0, len(point_ids), 256):
+            await self._client.set_payload(
+                collection_name=self.name, payload={"is_active": False},
+                points=PointIdsList(points=point_ids[offset:offset + 256]), wait=True)
+
+    async def delete_points(self, point_ids: list[str | int]) -> int:
+        if not point_ids:
+            return 0
+        await self.init()
+        if self._client is None:
+            return self._mem.delete(point_ids)
+        from qdrant_client.models import PointIdsList
+        for offset in range(0, len(point_ids), 256):
+            await self._client.delete(
+                collection_name=self.name,
+                points_selector=PointIdsList(points=point_ids[offset:offset + 256]),
+                wait=True)
+        return len(point_ids)
+
+    async def update_point_acl(self, point_ids: list[str | int],
+                               acl_principal_ids: list[str]) -> None:
+        if not point_ids:
+            return
+        await self.init()
+        payload = {"acl_principal_ids": acl_principal_ids,
+                   "acl_restricted": bool(acl_principal_ids)}
+        if self._client is None:
+            selected = set(point_ids)
+            for index, (point_id, vector, current) in enumerate(self._mem._pts):
+                if point_id in selected:
+                    self._mem._pts[index] = (point_id, vector, {**current, **payload})
+            return
+        from qdrant_client.models import PointIdsList
+        for offset in range(0, len(point_ids), 256):
+            await self._client.set_payload(
+                collection_name=self.name, payload=payload,
+                points=PointIdsList(points=point_ids[offset:offset + 256]), wait=True)
 
     async def count(self) -> int:
         await self.init()

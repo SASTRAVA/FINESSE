@@ -8,14 +8,27 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
-from engine.config import cfg, _cors_origins, _storage_paths
+from engine.config import _cors_origins, _storage_paths
 
 ROOT = Path(__file__).resolve().parent.parent
 
 
 class VercelDeploymentTests(unittest.TestCase):
+    def test_vercel_deploys_static_spa_and_never_routes_to_serverless_backend(self):
+        config = json.loads((ROOT / "vercel.json").read_text(encoding="utf-8"))
+        serialized = json.dumps(config)
+        self.assertNotIn("api/index.py", serialized)
+        self.assertNotIn("functions", config)
+        self.assertEqual(config["outputDirectory"], "engine/web/react-ui")
+        self.assertTrue(any(rule.get("destination") == "/index.html"
+                            for rule in config["rewrites"]))
+        headers = {header["key"]: header["value"]
+                   for rule in config["headers"] for header in rule["headers"]}
+        self.assertIn("max-age=63072000", headers["Strict-Transport-Security"])
+        self.assertIn("frame-ancestors 'none'", headers["Content-Security-Policy"])
+        self.assertNotIn("unsafe-eval", headers["Content-Security-Policy"])
+
     def test_vercel_asgi_entrypoint_routes_and_serves_ui(self):
         from fastapi.testclient import TestClient
         from api.index import app
@@ -38,9 +51,8 @@ class VercelDeploymentTests(unittest.TestCase):
             self.assertEqual(client.get("/api/health").status_code, 200)
             self.assertEqual(client.get("/api/v1/services").status_code, 401)
             self.assertEqual(client.get("/api/sastrava/catalog").status_code, 401)
-            with patch.object(cfg, "IS_VERCEL", True):
-                self.assertEqual(
-                    client.get("/api/index.py/api/health").status_code, 200)
+            # This ASGI compatibility shim remains directly testable, while the
+            # deployed Vercel config is static-only and never forwards API traffic.
 
     def test_vercel_defaults_and_domains_are_derived_without_touching_disk(self):
         data, vault = _storage_paths({"VERCEL": "1"})
@@ -86,6 +98,8 @@ class VercelDeploymentTests(unittest.TestCase):
             script = """
 import os
 import json
+import base64
+import time
 from pathlib import Path
 from fastapi.testclient import TestClient
 from api.index import app
@@ -93,6 +107,7 @@ from engine.auth.users import users
 from engine.config import cfg
 from engine.db.storage import storage
 from engine.rag.store import store
+from engine.security.mfa import _counter_code
 
 assert cfg.IS_VERCEL, "Vercel detection failed"
 assert cfg.DATA_DIR.resolve() == Path(os.environ["FINESSE_DATA_DIR"]).resolve(), "data path override failed"
@@ -104,7 +119,22 @@ with TestClient(app) as client:
     login = client.post("/api/v1/auth/login", json={
         "email": cfg.CEO_EMAIL, "password": cfg.CEO_PASSWORD})
     assert login.status_code == 200, "CEO login failed"
-    token = login.json()["access_token"]
+    auth = login.json()
+    if auth.get("mfa_required"):
+        challenge_headers = {"Authorization": "Bearer " + auth["challenge_token"]}
+        if auth["enrollment_required"]:
+            enrollment = client.post("/api/auth/mfa/enroll", headers=challenge_headers)
+            assert enrollment.status_code == 200, "MFA enrollment setup failed"
+            secret = enrollment.json()["secret"]
+            key = base64.b32decode(secret + "=" * ((8 - len(secret) % 8) % 8))
+            code = _counter_code(key, int(time.time() // 30))
+        else:
+            code = "000000"  # Existing factors are verified in dedicated MFA tests.
+        verified = client.post("/api/auth/mfa/verify", headers=challenge_headers,
+                               json={"code": code})
+        assert verified.status_code == 200, "MFA verification failed"
+        auth = verified.json()
+    token = auth["access_token"]
     headers = {"Authorization": "Bearer " + token}
     services = client.get("/api/v1/services", headers=headers)
     catalog = client.get("/api/sastrava/catalog", headers=headers)
@@ -157,7 +187,8 @@ assert users.get(cfg.CEO_EMAIL) is not None, "CEO bootstrap was blocked by backe
 with TestClient(app) as client:
     login = client.post("/api/v1/auth/login", json={
         "email": cfg.CEO_EMAIL, "password": cfg.CEO_PASSWORD})
-    assert login.status_code == 200, f"CEO login failed: {login.status_code} {login.text}"
+    assert login.status_code == 503 and "MFA service is unavailable" in login.text, (
+        f"incomplete production storage must fail closed for L4 MFA: {login.status_code}")
     health = client.get("/api/health")
     assert health.status_code == 503, "partial backend must remain not-ready"
     missing = health.json()["missing_env"]
@@ -219,12 +250,14 @@ with TestClient(app) as client:
         self.assertEqual(config["buildCommand"],
                          "cd frontend && npm ci && npm run build")
         self.assertEqual(config["outputDirectory"], "engine/web/react-ui")
-        destinations = {item["source"]: item["destination"]
-                        for item in config["rewrites"]}
-        for source in ("/health", "/api/:path*", "/hubapi/:path*", "/dashboard", "/command",
-                       "/jarvis", "/voice", "/workspace/", "/workspace/:path*",
-                       "/workspace", "/"):
-            self.assertEqual(destinations[source], "/api/index.py")
+        rewrites = config["rewrites"]
+        self.assertTrue(all("api/index.py" not in item.get("destination", "")
+                            for item in rewrites))
+        self.assertTrue(any(item.get("destination") == "/index.html"
+                            for item in rewrites))
+        rewrite_sources = {item["source"] for item in rewrites}
+        self.assertNotIn("/api/:path*", rewrite_sources)
+        self.assertNotIn("/hubapi/:path*", rewrite_sources)
         header_names = {
             header["key"]
             for rule in config["headers"]

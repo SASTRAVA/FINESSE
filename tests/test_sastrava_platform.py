@@ -214,7 +214,8 @@ class SastravaPlatformTests(unittest.TestCase):
     def test_client_intake_routes_to_selected_specialist_with_sensitivity(self):
         import engine.main as main
 
-        principal = {"sub": "ceo-user", "role": "CEO", "tier": 4}
+        principal = {"sub": "ceo-user", "role": "CEO", "tier": 4,
+                     "tenant_id": "default", "amr": ["pwd", "mfa"]}
         result = {"trace": "trace", "deliverable": "Listen / Shape / Deliver"}
         with patch("engine.main.decode_token", return_value=principal), \
                 patch.object(main.orchestrator, "run_directive",
@@ -253,7 +254,8 @@ class SastravaPlatformTests(unittest.TestCase):
     def test_security_scope_requires_authorization_attestation_and_security_permission(self):
         import engine.main as main
 
-        principal = {"sub": "ceo-user", "role": "CEO", "tier": 4}
+        principal = {"sub": "ceo-user", "role": "CEO", "tier": 4,
+                     "tenant_id": "default", "amr": ["pwd", "mfa"]}
         with patch("engine.main.decode_token", return_value=principal), \
                 patch.object(main.orchestrator, "run_directive",
                              new=AsyncMock(return_value={"deliverable": "scope"})) as run:
@@ -304,7 +306,8 @@ class SastravaPlatformTests(unittest.TestCase):
     def test_crm_manual_lead_is_tagged_with_service_line(self):
         import engine.main as main
 
-        principal = {"sub": "ceo-user", "role": "CEO", "tier": 4}
+        principal = {"sub": "ceo-user", "role": "CEO", "tier": 4,
+                     "tenant_id": "default", "amr": ["pwd", "mfa"]}
         lead = SimpleNamespace(
             id="lead-1", label=lambda: "Example", location="", industry="Software",
             need="Automate an AI workflow", fit_score=0.7, status="new",

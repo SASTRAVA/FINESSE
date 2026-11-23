@@ -10,14 +10,29 @@ free-tier 429s with backoff.
 """
 from __future__ import annotations
 import asyncio
+import hashlib
 import logging
 import re
 from typing import Optional
 
+from fastapi import HTTPException
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 from ..config import cfg
+from .resilient_router import CircuitBreakers, CircuitOpen
+from .budget_guard import BudgetExceeded, BudgetGuard
+from .concurrency_guard import PrioritySemaphore
+from .semantic_cache import CacheScope, SemanticCache
 from .turboquant import turbo
+
+try:
+    import redis as _redis
+    _budget_redis = (_redis.Redis.from_url(cfg.REDIS_URL, decode_responses=True)
+                     if cfg.REDIS_URL else None)
+except Exception:  # noqa: BLE001
+    _budget_redis = None
+budget_guard = BudgetGuard(redis_client=_budget_redis)
+semantic_cache = SemanticCache()
 
 try:
     from openai import AsyncOpenAI, RateLimitError, APIError
@@ -73,6 +88,8 @@ class LLM:
     """Async, backend-agnostic chat completion."""
 
     def __init__(self):
+        self._breakers = CircuitBreakers()
+        self._local_priority = PrioritySemaphore(cfg.LOCAL_LLM_MAX_CONCURRENCY)
         self._nim: Optional["AsyncOpenAI"] = None
         self._local: Optional["AsyncOpenAI"] = None
         self._jarvis: Optional["AsyncOpenAI"] = None
@@ -131,10 +148,17 @@ class LLM:
             return self._local, (cfg.LOCAL_LLM_MODEL or "local")
         return None, cfg.MODELS.get(role, cfg.MODELS["fast"])
 
-    def _select_backend(self, role: str, lane: str | None, sensitivity: str):
+    def _select_backend(self, role: str, lane: str | None, sensitivity: str,
+                        tenant_id: str = "default"):
         order = ("public", "internal", "confidential", "restricted")
         if sensitivity not in order:
             raise ValueError(f"unsupported sensitivity: {sensitivity}")
+        from ..feature_flags import kill_switches
+        if not kill_switches.enabled("cloud_llm_egress_enabled", tenant_id):
+            if self._local is None:
+                raise DataEgressBlocked("cloud LLM egress is disabled and no local backend is configured")
+            return (self._local, cfg.LOCAL_LLM_MODEL or cfg.MODELS.get(role, "local"),
+                    turbo._sem)
         if (sensitivity in ("confidential", "restricted")
                 and not cfg.ALLOW_CONFIDENTIAL_EXTERNAL_EGRESS):
             if self._local is not None:
@@ -158,21 +182,74 @@ class LLM:
     @retry(reraise=True, stop=stop_after_attempt(4),
            wait=wait_exponential(multiplier=1, min=1, max=20),
            retry=retry_if_exception_type((RateLimitError, APIError)))
-    async def _create(self, client, *, sem=None, **kwargs):
+    async def _create(self, client, *, sem=None, priority: int = 2, **kwargs):
         """Concurrency-bounded chat.completion with free-tier retry/backoff. `sem` is the
         lane's own semaphore (per-lane key isolation) or the shared global one.
         APIError is the base for APITimeoutError/APIConnectionError, so slow-tier
         timeouts and 429s are all retried here — one hiccup no longer kills an agent run."""
+        if client is self._local:
+            async with self._local_priority.slot(priority=priority,
+                                                 timeout_s=cfg.REQUEST_TIMEOUT_S):
+                async with (sem or turbo._sem):
+                    return await client.chat.completions.create(**kwargs)
         async with (sem or turbo._sem):
             return await client.chat.completions.create(**kwargs)
+
+    async def _metered_create(self, client, *, sem, tenant_id: str, user_id: str,
+                              lane: str, sensitivity: str, prompt_version: str,
+                              model: str, max_tokens: int, **kwargs):
+        messages = kwargs.get("messages", [])
+        input_tokens = max(1, (sum(len(str(message.get("content") or ""))
+                                   for message in messages) + 3) // 4)
+        try:
+            reservation_id = budget_guard.reserve(
+                tenant_id=tenant_id, user_id=user_id or "anonymous",
+                amount=input_tokens + max_tokens,
+                tenant_limit=cfg.MONTHLY_LLM_TOKEN_LIMIT,
+                user_daily_limit=cfg.DAILY_USER_LLM_TOKEN_LIMIT)
+        except BudgetExceeded as exc:
+            raise HTTPException(status_code=429, detail=exc.code) from exc
+        started = asyncio.get_running_loop().time()
+        provider_name = ("local" if client is self._local else
+                         "groq" if client is self._groq else "nim")
+        try:
+            priority = 0 if lane in {"exec", "security"} else 2
+            response = await self._create(client, sem=sem, priority=priority, model=model,
+                                          max_tokens=max_tokens, **kwargs)
+        except Exception:
+            budget_guard.settle(reservation_id, input_tokens)
+            raise
+        message = response.choices[0].message
+        content = message.content or ""
+        tool_text = "".join(call.function.arguments or "" for call in
+                            (getattr(message, "tool_calls", None) or []))
+        output_tokens = max(1, (len(content + tool_text) + 3) // 4)
+        budget_guard.settle(reservation_id, input_tokens + output_tokens)
+        budget_guard.record(
+            reservation_id=reservation_id, tenant_id=tenant_id, user_id=user_id or "anonymous",
+            agent_id=lane, provider=provider_name, model=model, prompt_version=prompt_version,
+            sensitivity=sensitivity, input_tokens=input_tokens, output_tokens=output_tokens,
+            latency_ms=int((asyncio.get_running_loop().time() - started) * 1000))
+        return response
 
     # ---- public API --------------------------------------------------------
     async def chat(self, system: str, user: str, role: str = "fast",
                    temperature: float = 0.3, max_tokens: int = 1200,
-                   sensitivity: str = "internal", lane: str | None = None) -> str:
-        client, model, _ = self._select_backend(role, lane, sensitivity)
+                   sensitivity: str = "internal", lane: str | None = None,
+                   tenant_id: str = "default", prompt_version: str = "builtin",
+                   acl_scope_hash: str = "", user_id: str = "anonymous") -> str:
+        client, model, _ = self._select_backend(role, lane, sensitivity, tenant_id)
         system, user = self._scrub(system), self._scrub(user)
         prompt = f"SYS::{system}\nUSR::{user}"
+        cache_scope = CacheScope(
+            tenant_id=tenant_id, lane=lane or role, sensitivity=sensitivity,
+            model_version=model, prompt_version=prompt_version,
+            acl_scope_hash=acl_scope_hash or hashlib.sha256(b"").hexdigest())
+        cacheable = temperature <= 0.2 and sensitivity != "restricted"
+        if cacheable:
+            cached = await semantic_cache.get(prompt, cache_scope)
+            if cached is not None:
+                return cached
 
         if client is None:  # no backend configured -> offline stub, system still works
             async def _echo() -> str:
@@ -181,49 +258,109 @@ class LLM:
                         f"Would answer: {user[:280]}")
             if sensitivity in ("confidential", "restricted"):
                 return await _echo()
-            return await turbo.run(model, prompt, temperature, _echo)
+            return await turbo.run(model, prompt, temperature, _echo,
+                                   tenant_id=tenant_id, lane=lane or "", sensitivity=sensitivity,
+                                   prompt_version=prompt_version,
+                                   acl_scope_hash=acl_scope_hash)
 
-        @retry(reraise=True,
-               stop=stop_after_attempt(4),
-               wait=wait_exponential(multiplier=1, min=1, max=20),
-               retry=retry_if_exception_type((RateLimitError, APIError)))
+        candidates = [(client, model)]
+        if client is not self._local:
+            candidates.extend((candidate, candidate_model) for candidate, candidate_model in (
+                (self._nim, cfg.MODELS.get(role, model)),
+                (self._groq, cfg.GROQ_MODEL),
+                (self._local, cfg.LOCAL_LLM_MODEL or model),
+            ) if candidate is not None and all(candidate is not existing for existing, _ in candidates))
+
         async def _call() -> str:
-            resp = await client.chat.completions.create(
-                model=model,
-                messages=[{"role": "system", "content": system},
-                          {"role": "user", "content": user}],
-                temperature=temperature,
-                max_tokens=max_tokens,
-            )
-            return resp.choices[0].message.content or ""
+            last_error = None
+            input_tokens = max(1, (len(prompt) + 3) // 4)
+            try:
+                reservation_id = budget_guard.reserve(
+                    tenant_id=tenant_id, user_id=user_id, amount=input_tokens + max_tokens,
+                    tenant_limit=cfg.MONTHLY_LLM_TOKEN_LIMIT,
+                    user_daily_limit=cfg.DAILY_USER_LLM_TOKEN_LIMIT)
+            except BudgetExceeded as exc:
+                raise HTTPException(status_code=429, detail=exc.code) from exc
+            started = asyncio.get_running_loop().time()
+            selected_provider = "unknown"
+            selected_model = model
+            for candidate, candidate_model in candidates:
+                provider_name = ("local" if candidate is self._local else
+                                 "groq" if candidate is self._groq else "nim")
+
+                @retry(reraise=True, stop=stop_after_attempt(4),
+                       wait=wait_exponential(multiplier=1, min=1, max=20),
+                       retry=retry_if_exception_type((RateLimitError, APIError)))
+                async def _attempt() -> str:
+                    resp = await candidate.chat.completions.create(
+                        model=candidate_model,
+                        messages=[{"role": "system", "content": system},
+                                  {"role": "user", "content": user}],
+                        temperature=temperature, max_tokens=max_tokens)
+                    return resp.choices[0].message.content or ""
+                try:
+                    response = await self._breakers.call(provider_name, _attempt)
+                    selected_provider, selected_model = provider_name, candidate_model
+                    output_tokens = max(1, (len(response) + 3) // 4)
+                    budget_guard.settle(reservation_id, input_tokens + output_tokens)
+                    budget_guard.record(
+                        reservation_id=reservation_id, tenant_id=tenant_id, user_id=user_id,
+                        agent_id=lane or role, provider=selected_provider, model=selected_model,
+                        prompt_version=prompt_version, sensitivity=sensitivity,
+                        input_tokens=input_tokens, output_tokens=output_tokens,
+                        latency_ms=int((asyncio.get_running_loop().time() - started) * 1000))
+                    return response
+                except CircuitOpen as exc:
+                    last_error = exc
+                except (RateLimitError, APIError) as exc:
+                    last_error = exc
+                except Exception:
+                    budget_guard.settle(reservation_id, input_tokens)
+                    raise
+            if last_error:
+                budget_guard.settle(reservation_id, input_tokens)
+                raise last_error
+            budget_guard.settle(reservation_id, input_tokens)
+            raise RuntimeError("no eligible inference provider is available")
 
         if sensitivity in ("confidential", "restricted"):
-            return await _call()
-        return await turbo.run(model, prompt, temperature, _call)
+            result = await _call()
+        else:
+            result = await turbo.run(model, prompt, temperature, _call,
+                                     tenant_id=tenant_id, lane=lane or "", sensitivity=sensitivity,
+                                     prompt_version=prompt_version, acl_scope_hash=acl_scope_hash)
+        if cacheable:
+            await semantic_cache.set(prompt, result, cache_scope)
+        return result
 
     async def chat_with_tools(self, system: str, user: str, *, role: str,
                               tool_schemas: list[dict], dispatch,
                               temperature: float = 0.3, max_tokens: int = 1600,
                               max_rounds: int = 2, lane: str | None = None,
-                              sensitivity: str = "internal") -> str:
+                              sensitivity: str = "internal", tenant_id: str = "default",
+                              user_id: str = "anonymous", prompt_version: str = "builtin") -> str:
         """
         Tool-calling loop (OpenAI/NIM function-calling). `dispatch(name, args)` must
         be an async fn returning a string tool result. Falls back to plain chat when
         no real backend is configured. Not cached (tool calls are dynamic).
         """
         import json
-        client, model, sem = self._select_backend(role, lane, sensitivity)
+        client, model, sem = self._select_backend(role, lane, sensitivity, tenant_id)
         system, user = self._scrub(system), self._scrub(user)
         if client is None:
             return await self.chat(system, user, role=role, temperature=temperature,
-                                   max_tokens=max_tokens, sensitivity=sensitivity, lane=lane)
+                                   max_tokens=max_tokens, sensitivity=sensitivity, lane=lane,
+                                   tenant_id=tenant_id, user_id=user_id,
+                                   prompt_version=prompt_version)
 
         messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
         last = ""
         for _ in range(max_rounds):
-            resp = await self._create(
-                client, sem=sem, model=model, messages=messages, tools=tool_schemas,
-                tool_choice="auto", temperature=temperature, max_tokens=max_tokens)
+            resp = await self._metered_create(
+                client, sem=sem, tenant_id=tenant_id, user_id=user_id, lane=lane or role,
+                sensitivity=sensitivity, prompt_version=prompt_version,
+                model=model, max_tokens=max_tokens, messages=messages, tools=tool_schemas,
+                tool_choice="auto", temperature=temperature)
             msg = resp.choices[0].message
             last = msg.content or last
             if not getattr(msg, "tool_calls", None):
@@ -243,15 +380,20 @@ class LLM:
                 messages.append({"role": "tool", "tool_call_id": tc.id,
                                  "content": self._scrub(result)})
         # ran out of rounds — ask for a final answer with no more tools
-        resp = await self._create(
-            client, sem=sem, model=model, messages=messages, temperature=temperature, max_tokens=max_tokens)
+        resp = await self._metered_create(
+            client, sem=sem, tenant_id=tenant_id, user_id=user_id, lane=lane or role,
+            sensitivity=sensitivity, prompt_version=prompt_version,
+            model=model, max_tokens=max_tokens, messages=messages,
+            temperature=temperature)
         return resp.choices[0].message.content or last
 
     async def agentic_loop(self, system: str, task_prompt: str, *, role: str,
                            tool_schemas: list[dict], dispatch, on_step,
                            temperature: float = 0.3, max_tokens: int = 1600,
                            max_steps: int = 8, lane: str | None = None,
-                           sensitivity: str = "internal") -> tuple[str, int]:
+                           sensitivity: str = "internal", tenant_id: str = "default",
+                           user_id: str = "anonymous", prompt_version: str = "builtin",
+                           acl_scope_hash: str = "") -> tuple[str, int]:
         """
         Hermes/Claude-style autonomous loop: the model plans, calls tools, observes
         the results, and keeps going until it produces a final answer (a turn with
@@ -259,21 +401,29 @@ class LLM:
         Returns (final_text, steps_taken).
         """
         import json
-        client, model, sem = self._select_backend(role, lane, sensitivity)
+        client, model, sem = self._select_backend(role, lane, sensitivity, tenant_id)
         system, task_prompt = self._scrub(system), self._scrub(task_prompt)
         if client is None:
             return await self.chat(system, task_prompt, role=role, temperature=temperature,
-                                   max_tokens=max_tokens, sensitivity=sensitivity, lane=lane), 1
+                                   max_tokens=max_tokens, sensitivity=sensitivity, lane=lane,
+                                   tenant_id=tenant_id, prompt_version=prompt_version,
+                                   acl_scope_hash=acl_scope_hash), 1
         messages = [{"role": "system", "content": system},
                     {"role": "user", "content": task_prompt}]
         last = ""
         step = 0
-        for step in range(1, max_steps + 1):
-            resp = await self._create(
-                client, sem=sem, model=model, messages=messages,
+        for step in range(1, min(max_steps, 12) + 1):
+            from ..orchestra.compactor import compact
+            compacted = compact(messages, sensitivity=sensitivity, context_limit=cfg.LLM_CONTEXT_TOKENS,
+                                trigger_ratio=cfg.COMPACTION_TRIGGER_RATIO)
+            messages = compacted.messages
+            resp = await self._metered_create(
+                client, sem=sem, tenant_id=tenant_id, user_id=user_id, lane=lane or role,
+                sensitivity=sensitivity, prompt_version=prompt_version,
+                model=model, max_tokens=max_tokens, messages=messages,
                 tools=tool_schemas or None,
                 tool_choice=("auto" if tool_schemas else None),
-                temperature=temperature, max_tokens=max_tokens)
+                temperature=temperature)
             msg = resp.choices[0].message
             calls = getattr(msg, "tool_calls", None)
             if calls:

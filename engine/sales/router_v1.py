@@ -13,7 +13,9 @@ from fastapi.responses import Response
 from jwt import PyJWTError
 
 from ..auth.security import (
-    decode_token, make_token, make_gatekeeper_approval, verify_gatekeeper_approval,
+    build_login_response, decode_token, make_token, make_gatekeeper_approval,
+    mfa_required_for,
+    verify_gatekeeper_approval,
 )
 from ..config import cfg, vercel_missing_auth_environment
 from ..auth.users import users
@@ -56,6 +58,12 @@ def current_sales_user(credentials: HTTPAuthorizationCredentials | None = Depend
     user = decode_token(credentials.credentials)
     if not user:
         raise HTTPException(401, "invalid or expired token")
+    try:
+        if mfa_required_for(user.get("tenant_id", "default"), user.get("tier", 1)) \
+                and "mfa" not in user.get("amr", []):
+            raise HTTPException(403, "MFA_REQUIRED")
+    except RuntimeError as exc:
+        raise HTTPException(503, "MFA policy storage is unavailable") from exc
     return user
 
 
@@ -95,21 +103,29 @@ async def sales_login(body: LoginIn):
         login_throttle.failed(account=account)
         raise HTTPException(401, "bad credentials")
     login_throttle.succeeded(account=account)
-    return {"access_token": make_token(account_user.email, account_user.role,
-                                       account_user.tier, account_user.tenant_id),
-            "token_type": "bearer", "user": account_user.public()}
+    try:
+        return build_login_response(account_user)
+    except RuntimeError as exc:
+        raise HTTPException(503, "MFA service is unavailable") from exc
 
 
 @router.post("/auth/refresh")
 async def refresh_sales_token(user: dict = Depends(current_sales_user)):
     return {"access_token": make_token(user["sub"], user["role"], user.get("tier", 1),
-                                       user.get("tenant_id", "default")),
+                                       user.get("tenant_id", "default"),
+                                       amr=user.get("amr", ["pwd"])),
             "token_type": "bearer"}
 
 
 @router.post("/auth/logout")
-async def logout_sales(_user: dict = Depends(current_sales_user)):
-    return {"logged_out": True, "detail": "JWT expires according to configured lifetime."}
+async def logout_sales(user: dict = Depends(current_sales_user)):
+    tenant_id, jti = user.get("tenant_id"), user.get("jti")
+    if isinstance(tenant_id, str) and isinstance(jti, str) and jti:
+        storage.put("revoked_sessions", tenant_id, jti, {
+            "status": "REVOKED", "sub": user.get("sub"),
+            "expires_at": user.get("exp", 0),
+        })
+    return {"logged_out": True}
 
 
 @router.get("/users/me")

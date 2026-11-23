@@ -26,6 +26,7 @@ from pydantic import BaseModel, Field
 
 from .config import cfg
 from .auth import decode_token
+from .auth.security import build_login_response, mfa_required_for
 from .auth.rbac import can, role_of
 from .security.ws_tickets import consume_ticket, issue_ticket
 router = APIRouter(prefix="/hubapi")
@@ -38,6 +39,12 @@ def _current_user(creds: HTTPAuthorizationCredentials = Depends(_bearer)) -> dic
     payload = decode_token(creds.credentials)
     if not payload:
         raise HTTPException(401, "invalid or expired token")
+    try:
+        if mfa_required_for(payload.get("tenant_id", "default"), payload.get("tier", 1)) \
+                and "mfa" not in payload.get("amr", []):
+            raise HTTPException(403, "MFA_REQUIRED")
+    except RuntimeError as exc:
+        raise HTTPException(503, "MFA policy storage is unavailable") from exc
     return payload
 
 
@@ -118,7 +125,7 @@ def _vault_note(node_id: str, stmt: str, data: dict, tenant_id: str = "default")
 async def hub_token(form: OAuth2PasswordRequestForm = Depends(),
                     tenant_id: str = Form("default")):
     """Gatekeeper login using an account from the FINESSE user store."""
-    from .auth import users, make_token
+    from .auth import users
     from .main import login_throttle
     account = login_throttle.normalize_account(form.username)
     if not login_throttle.allowed(account=account):
@@ -126,8 +133,10 @@ async def hub_token(form: OAuth2PasswordRequestForm = Depends(),
     u = users.authenticate(form.username, form.password, tenant_id)
     if u:
         login_throttle.succeeded(account=account)
-        return {"access_token": make_token(u.email, u.role, u.tier, u.tenant_id),
-                "token_type": "bearer"}
+        try:
+            return build_login_response(u)
+        except RuntimeError as exc:
+            raise HTTPException(503, "MFA service is unavailable") from exc
     login_throttle.failed(account=account)
     raise HTTPException(401, "Invalid credentials")
 

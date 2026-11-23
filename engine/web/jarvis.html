@@ -115,6 +115,7 @@
 <div id="login"><div class="card">
   <div class="brand" style="font-size:19px">Sign in to <b>JARVIS</b></div>
   <input id="li_email" placeholder="email" value="">
+  <input id="li_tenant" placeholder="tenant ID" value="default" autocomplete="organization">
   <input id="li_pw" type="password" placeholder="password" onkeydown="if(event.key==='Enter')doLogin()">
   <div style="height:12px"></div>
   <button class="btn univ" style="width:100%" onclick="doLogin()">Enter</button>
@@ -136,9 +137,21 @@ const ACT={research:'🔎 sourcing intelligence',build:'⚙ dispatching the swar
 async function api(p,o={}){o.headers=Object.assign({'Content-Type':'application/json'},o.headers||{});
   if(TOKEN)o.headers.Authorization='Bearer '+TOKEN;const r=await fetch(p,o);
   if(r.status===401){TOKEN='';localStorage.removeItem('finesse_token');$('login').style.display='grid';throw new Error('sign in');}
-  if(!r.ok)throw new Error((await r.json().catch(()=>({detail:r.statusText}))).detail);return r.json();}
-async function doLogin(){$('li_err').textContent='';try{const r=await api('/api/login',{method:'POST',body:JSON.stringify({email:$('li_email').value.trim(),password:$('li_pw').value})});
-  TOKEN=r.token;localStorage.setItem('finesse_token',TOKEN);$('login').style.display='none';ensureAudio();boot();}catch(e){$('li_err').textContent=e.message;}}
+  if(!r.ok){const problem=await r.json().catch(()=>({detail:r.statusText}));
+    if(r.status===403&&problem.detail==='MFA_REQUIRED'){TOKEN='';localStorage.removeItem('finesse_token');$('login').style.display='grid';}
+    throw new Error(problem.detail);}return r.json();}
+async function completeMfaLogin(result){if(!result.mfa_required)return result.token;
+  const headers={Authorization:'Bearer '+result.challenge_token};
+  if(result.enrollment_required){const setupResponse=await fetch('/api/auth/mfa/enroll',{method:'POST',headers});
+    const setup=await setupResponse.json();if(!setupResponse.ok)throw new Error(setup.detail||'MFA setup failed');
+    alert('Add FINESSE to your authenticator with this setup key:\n'+setup.secret+'\n\nProvisioning URI:\n'+setup.provisioning_uri);}
+  const code=prompt('Enter your authenticator or one-time recovery code:');if(!code)throw new Error('MFA verification cancelled');
+  const response=await fetch('/api/auth/mfa/verify',{method:'POST',headers:{...headers,'Content-Type':'application/json'},body:JSON.stringify({code})});
+  const verified=await response.json();if(!response.ok)throw new Error(verified.detail||'MFA verification failed');
+  if(verified.recovery_codes)alert('Save these one-time recovery codes now:\n'+verified.recovery_codes.join('\n'));
+  return verified.access_token;}
+async function doLogin(){$('li_err').textContent='';try{const r=await api('/api/login',{method:'POST',body:JSON.stringify({email:$('li_email').value.trim(),password:$('li_pw').value,tenant_id:$('li_tenant').value.trim()||'default'})});
+  TOKEN=await completeMfaLogin(r);if(!TOKEN)throw new Error('Authentication response did not include a session');localStorage.setItem('finesse_token',TOKEN);$('login').style.display='none';ensureAudio();boot();}catch(e){$('li_err').textContent=e.message;}}
 
 /* ---------- starfield ---------- */
 (function(){const c=$('stars'),x=c.getContext('2d');let w,h,st=[];

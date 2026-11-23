@@ -12,6 +12,8 @@ from typing import List, Optional
 
 from ..auth.rbac import max_sensitivity, permitted_lanes
 from ..prompt_guard import is_untrusted_source, wrap_untrusted_content
+from .citations import citation_record
+from .reranker import local_reranker
 from .store import store
 
 
@@ -59,11 +61,14 @@ class Retriever:
             lanes = allowed_lanes
         sensitivity_order = ("public", "internal", "confidential", "restricted")
         clearance = sensitivity_order.index(max_sensitivity(principal))
+        allowed_sensitivities = list(sensitivity_order[:clearance + 1])
         raw = []
         for allowed_lane in lanes:
             raw.extend(await store.search(
                 query, limit=limit * 3,
-                flt={"lane": allowed_lane, "tenant_id": tenant_id},
+                flt={"lane": allowed_lane, "tenant_id": tenant_id,
+                     "sensitivity_allowed": allowed_sensitivities, "is_active": True,
+                     "acl_principal_ids": [user_id] if user_id else []},
                 tenant_id=tenant_id))
 
         candidates = []
@@ -109,7 +114,7 @@ class Retriever:
             candidate["bm25_rank"] = bm25_rank[index]
             results.append(candidate)
         results.sort(key=lambda result: result["score"], reverse=True)
-        return results[:limit]
+        return local_reranker.rerank(query, results[:25], limit=limit)
 
     async def context(self, query: str, *, role: Optional[str] = None,
                       lane: Optional[str] = None, user_id: str = "",
@@ -144,10 +149,7 @@ class Retriever:
                 break
             blocks.append(block)
             total += len(block)
-            citations.append({"id": citation, "title": p.get("title", "?"),
-                              "source": p.get("source", "?"),
-                              "document_id": p.get("document_id"),
-                              "version": p.get("version")})
+            citations.append(citation_record(citation, p, snippet).as_dict())
         return {"text": "\n\n---\n\n".join(blocks) if blocks else "(no relevant brain context found)",
                 "sensitivity": sensitivity, "tainted": tainted, "citations": citations}
 

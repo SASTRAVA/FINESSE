@@ -8,6 +8,7 @@ services:
       dockerfile: deploy/Dockerfile
     environment:
       FINESSE_ENV: development
+      DEPLOYMENT_MODE: portable_ssd
       HOST: 0.0.0.0
       PORT: 8600
       FINESSE_DATA_DIR: /app/data
@@ -21,6 +22,10 @@ services:
       CEO_EMAIL: ${CEO_EMAIL:?Set CEO_EMAIL in .env.portable}
       CEO_PASSWORD: ${CEO_PASSWORD:?Set CEO_PASSWORD in .env.portable}
       KMS_MASTER_KEY: ${KMS_MASTER_KEY:?Set KMS_MASTER_KEY in .env.portable}
+      PORTABLE_LICENSE_REQUIRED: ${PORTABLE_LICENSE_REQUIRED:-false}
+      PORTABLE_LICENSE_FILE: /app/data/license.json
+      PORTABLE_LICENSE_PUBLIC_KEY: ${PORTABLE_LICENSE_PUBLIC_KEY:-}
+      PORTABLE_TENANT_ID: ${PORTABLE_TENANT_ID:-default}
       CORS_ORIGINS: http://127.0.0.1:8600,http://localhost:8600
       PUBLIC_BASE_URL: http://127.0.0.1:${FINESSE_PORT:-8600}
       OTEL_ENABLED: "false"
@@ -32,6 +37,7 @@ services:
       SALES_LIVE_OUTREACH_ENABLED: "false"
       EMAIL_LIVE_ENABLED: "false"
       VOICE_LIVE_ENABLED: "false"
+      LOCAL_LLM_MAX_CONCURRENCY: 2
       SALES_ENRICHMENT_ENABLED: "false"
       CALENDAR_SYNC_ENABLED: "false"
     ports:
@@ -68,6 +74,8 @@ services:
     image: ollama/ollama:0.40.17
     environment:
       OLLAMA_HOST: 0.0.0.0:11434
+      OLLAMA_NUM_PARALLEL: ${OLLAMA_NUM_PARALLEL:-2}
+      OLLAMA_MAX_LOADED_MODELS: ${OLLAMA_MAX_LOADED_MODELS:-1}
     volumes:
       - ../portable-runtime/ollama:/root/.ollama
     networks:

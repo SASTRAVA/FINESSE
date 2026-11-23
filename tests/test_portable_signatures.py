@@ -11,6 +11,7 @@ from engine.portable.signatures import (
     verify_license,
     verify_signed_bundle,
 )
+from engine.portable.license_gate import validate_portable_license
 
 
 @pytest.fixture
@@ -60,3 +61,23 @@ def test_signed_update_bundle_is_hashed_before_acceptance(tmp_path, signer):
     bundle.write_bytes(b"tampered update")
     with pytest.raises(SignatureVerificationError, match="content"):
         verify_signed_bundle(bundle, sign(claims), public_key)
+
+
+def test_runtime_license_gate_is_optional_then_enforces_signature_tenant_and_expiry(
+        tmp_path, signer):
+    import json
+
+    public_key, sign = signer
+    claims = {"product": "FINESSE", "license_id": "lic-1", "tenant_id": "tenant-1",
+              "features": ["offline"], "issued_at": 100, "not_before": 100,
+              "expires_at": 500}
+    license_file = tmp_path / "license.json"
+    license_file.write_text(json.dumps(sign(claims)), encoding="utf-8")
+    assert validate_portable_license(required=False, license_file="missing", public_key="",
+                                     tenant_id="", now=200) is None
+    assert validate_portable_license(required=True, license_file=license_file,
+                                     public_key=public_key, tenant_id="tenant-1",
+                                     now=200) == claims
+    with pytest.raises(SignatureVerificationError, match="tenant"):
+        validate_portable_license(required=True, license_file=license_file,
+                                  public_key=public_key, tenant_id="other", now=200)

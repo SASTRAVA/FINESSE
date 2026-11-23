@@ -11,6 +11,7 @@
 - Browser event streams now use hashed, expiring, single-use ticket records; long-lived JWTs are no longer placed in FINESSE operator WebSocket URLs. Both stream handlers require an allowlisted `Origin` before accept.
 - Successful login, password change, and user creation are written to per-tenant hash chains. PostgreSQL migration `003_hash_chained_audit.sql` applies RLS and blocks update/delete on audit events; SQLite tests enforce append-only triggers.
 - File uploads are capped at 10 MiB, checked against content signatures, and Office archives are rejected for path traversal, encryption, extreme expansion, excessive entries, or oversized members before format parsing.
+- L3/L4 password authentication requires a separate TOTP step; a tenant can require it for all roles. Seeds use the tenant credential encryption store, recovery codes are Argon2id hashes, TOTP counters are consumed under a tenant transaction, and MFA challenges are short-lived and single-use.
 
 ## Residual risks and unverified requirements
 
@@ -18,7 +19,7 @@
 - WebSocket tickets are consumed from the configured platform database. Redis-backed ticket TTL/session revocation and Redis cross-replica stream behavior still require live Redis tests. Hub idea state remains partly in process memory.
 - The hash-chained log currently captures login success, password change, and user creation. It does not yet capture every sensitive API action; the current audit views and event bus are not a substitute for a complete independently retained audit program.
 - Document ingestion is bounded and parser work runs off the event loop, but it is still a synchronous request/response operation rather than a durable queue handoff. S3-compatible vault storage and worker/DLQ deployment are not present.
-- OIDC/SAML, MFA enforcement, SCIM, key rotation, MCP OAuth, export/billing integrations, and verified supply-chain releases are not implemented in this construction slice.
+- OIDC/SAML, SCIM, WebAuthn/passkeys, kid-aware JWKS rotation, session-wide logout revocation, external KMS/BYOK crypto-shredding, MCP OAuth, export/billing integrations, and verified supply-chain releases are not implemented in this construction slice.
 - Public routes are intentionally enumerated in the route inventory. Reassess their rationale if their response content or behavior changes.
 - Production PostgreSQL, Redis, remote Qdrant, backup restoration, performance, chaos, and adversarial testing were not run in this host session.
 

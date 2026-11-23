@@ -32,6 +32,7 @@ python-dotenv==1.2.2
 tenacity==9.0.0                  # retry/backoff around free-tier rate limits
 redis==5.2.1                    # optional shared login-throttle backend
 cryptography==50.0.2            # tenant-bound provider credential encryption
+argon2-cffi==25.1.0             # Argon2id hashes for MFA recovery codes
 psycopg[binary]==3.3.6           # optional PostgreSQL RLS persistence backend
 numpy==2.3.4
 

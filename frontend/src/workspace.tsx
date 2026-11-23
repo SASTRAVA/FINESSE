@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { apiUrl } from "./api/client";
 
 type Tab = "command" | "sales" | "memory" | "security" | "calendar";
 type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
@@ -31,7 +32,11 @@ export function Workspace() {
   const [token, setToken] = useState(() => sessionStorage.getItem("finesse-token") ?? "");
   const [tab, setTab] = useState<Tab>("command");
   const [email, setEmail] = useState("");
+  const [tenantId, setTenantId] = useState("default");
   const [password, setPassword] = useState("");
+  const [mfaChallenge, setMfaChallenge] = useState("");
+  const [mfaCode, setMfaCode] = useState("");
+  const [mfaSetup, setMfaSetup] = useState<{ secret: string; provisioning_uri: string } | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [data, setData] = useState<RecordData>({});
@@ -40,7 +45,7 @@ export function Workspace() {
 
   useEffect(() => {
     let active = true;
-    fetch("/api/v1/platform/runtime")
+    fetch(apiUrl("/api/v1/platform/runtime"))
       .then(async (response) => {
         if (!response.ok) throw new Error(`Runtime status unavailable (${response.status})`);
         return await response.json() as RuntimeInfo;
@@ -54,7 +59,7 @@ export function Workspace() {
     const headers = new Headers(init.headers);
     headers.set("Content-Type", "application/json");
     if (token) headers.set("Authorization", `Bearer ${token}`);
-    const raw = await fetch(path, { ...init, headers }).then(async (response) => ({
+    const raw = await fetch(apiUrl(path), { ...init, headers }).then(async (response) => ({
       response,
       body: await response.text(),
     }));
@@ -67,6 +72,10 @@ export function Workspace() {
       }
     }
     if (!raw.response.ok) {
+      if (raw.response.status === 403 && payload.detail === "MFA_REQUIRED") {
+        sessionStorage.removeItem("finesse-token");
+        setToken("");
+      }
       throw new Error(typeof payload.detail === "string" ? payload.detail : `Request failed (${raw.response.status})`);
     }
     return payload;
@@ -120,8 +129,24 @@ export function Workspace() {
     setError("");
     try {
       const result = await request("/api/v1/auth/login", {
-        method: "POST", body: JSON.stringify({ email, password }),
+        method: "POST", body: JSON.stringify({ email, password, tenant_id: tenantId }),
       });
+      if (result.mfa_required === true && typeof result.challenge_token === "string") {
+        setMfaChallenge(result.challenge_token);
+        if (result.enrollment_required === true) {
+          const response = await fetch(apiUrl("/api/auth/mfa/enroll"), {
+            method: "POST", headers: { Authorization: `Bearer ${result.challenge_token}` },
+          });
+          const setup = await response.json() as RecordData;
+          if (!response.ok || typeof setup.secret !== "string" ||
+              typeof setup.provisioning_uri !== "string") {
+            throw new Error(typeof setup.detail === "string" ? setup.detail : "MFA enrollment setup failed");
+          }
+          setMfaSetup({ secret: setup.secret, provisioning_uri: setup.provisioning_uri });
+        }
+        setPassword("");
+        return;
+      }
       const issued = result.access_token;
       if (typeof issued !== "string") throw new Error("Authentication response did not include a token");
       sessionStorage.setItem("finesse-token", issued);
@@ -134,24 +159,79 @@ export function Workspace() {
     }
   }
 
+  async function verifyMfa(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!mfaChallenge) return;
+    setBusy(true);
+    setError("");
+    try {
+      const response = await fetch(apiUrl("/api/auth/mfa/verify"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${mfaChallenge}` },
+        body: JSON.stringify({ code: mfaCode }),
+      });
+      const result = await response.json() as RecordData;
+      if (!response.ok || typeof result.access_token !== "string") {
+        throw new Error(typeof result.detail === "string" ? result.detail : "MFA verification failed");
+      }
+      sessionStorage.setItem("finesse-token", result.access_token);
+      setToken(result.access_token);
+      setMfaChallenge("");
+      setMfaCode("");
+      setMfaSetup(null);
+      const recovery = result.recovery_codes;
+      setNotice(Array.isArray(recovery)
+        ? `Save these one-time recovery codes now:\n${recovery.join("\n")}`
+        : "MFA verification complete.");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "MFA verification failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function logout() {
     sessionStorage.removeItem("finesse-token");
     setToken("");
+    setMfaChallenge("");
+    setMfaCode("");
+    setMfaSetup(null);
     setData({});
   }
 
   if (!token) {
     return <main className="login-wrap">
-      <form className="login-card" onSubmit={login}>
+      <form className="login-card" onSubmit={mfaChallenge ? verifyMfa : login}>
         <span className="eyebrow">SASTRAVA · FINESSE</span>
-        <h1>Operator workspace</h1>
-        <p>Sign in with your FINESSE account. The session token stays in this browser tab.</p>
+        <h1>{mfaChallenge ? "Verify your identity" : "Operator workspace"}</h1>
+        <p>{mfaChallenge ? "Enter the code from your authenticator or a recovery code." :
+          "Sign in with your FINESSE account. The session token stays in this browser tab."}</p>
         <span className="status-badge" role="status">{runtimeLabel(runtime)}</span>
-        <label htmlFor="email">Email</label>
-        <input id="email" autoComplete="username" type="email" value={email} onChange={(event) => setEmail(event.target.value)} required />
-        <label htmlFor="password">Password</label>
-        <input id="password" autoComplete="current-password" type="password" value={password} onChange={(event) => setPassword(event.target.value)} required />
-        <button disabled={busy}>{busy ? "Signing in…" : "Sign in"}</button>
+        {!mfaChallenge && <>
+          <label htmlFor="email">Email</label>
+          <input id="email" autoComplete="username" type="email" value={email} onChange={(event) => setEmail(event.target.value)} required />
+          <label htmlFor="tenant-id">Tenant ID</label>
+          <input id="tenant-id" autoComplete="organization" value={tenantId}
+            onChange={(event) => setTenantId(event.target.value)} required />
+          <label htmlFor="password">Password</label>
+          <input id="password" autoComplete="current-password" type="password" value={password} onChange={(event) => setPassword(event.target.value)} required />
+        </>}
+        {mfaSetup && <aside className="card">
+          <h2>Set up your authenticator</h2>
+          <p>Add this account to an authenticator app, then enter its current six-digit code.</p>
+          <p><strong>Setup key:</strong> <code>{mfaSetup.secret}</code></p>
+          <details><summary>Provisioning URI</summary><code>{mfaSetup.provisioning_uri}</code></details>
+        </aside>}
+        {mfaChallenge && <>
+          <label htmlFor="mfa-code">Authenticator or recovery code</label>
+          <input id="mfa-code" autoComplete="one-time-code" inputMode="text" value={mfaCode}
+            onChange={(event) => setMfaCode(event.target.value)} required />
+        </>}
+        <button disabled={busy}>{busy ? "Checking…" : mfaChallenge ? "Verify code" : "Sign in"}</button>
+        {mfaChallenge && <button type="button" className="quiet" disabled={busy}
+          onClick={() => { setMfaChallenge(""); setMfaSetup(null); setMfaCode(""); }}>
+          Cancel and sign in again
+        </button>}
         <Status error={error} notice="" />
       </form>
     </main>;

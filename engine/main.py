@@ -22,12 +22,14 @@ import asyncio
 import uuid
 import ipaddress
 import re
+import time
 import logging
+import hmac
 from pathlib import Path
 from typing import Annotated
 
 from fastapi import (FastAPI, Depends, HTTPException, UploadFile, File, Form, Request, WebSocket,
-                     WebSocketDisconnect, Response)
+                     WebSocketDisconnect, Response, Header)
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -36,10 +38,12 @@ from pydantic import BaseModel, Field
 from .config import (cfg, validate_runtime_security, vercel_missing_auth_environment,
                      vercel_missing_environment)
 from .auth import users, make_token, decode_token, role_of, can, ROLES
+from .auth.security import build_login_response, consume_mfa_challenge, mfa_required_for
 from .auth.security import LoginThrottle
 from .rag import store, ingest_text, ingest_file
 from .rag.upload_validator import (MAX_UPLOAD_BYTES, UploadValidationError,
                                    validate_upload)
+from .rag.doc_lifecycle import document_lifecycle
 from .rag.embeddings import embedder
 from .llm import llm, turbo
 from .llm.provider import DataEgressBlocked
@@ -56,10 +60,19 @@ from . import crawler
 from .db.storage import storage
 from .security.toolchain import erasure_certificate
 from .security.ws_tickets import consume_ticket, issue_ticket
+from .security.jwks_manager import JWTKeyError, jwks_manager
+from .security.scim_router import router as _scim_router
 from .audit.pg_audit import audit_log
 from .safety_state import activate_emergency_stop
+from .feature_flags import kill_switches
+from .compliance.services import compliance
+from .exports.deliverables import build_docx, resolve_verified_citations
+from .observability.metrics import metrics
+from .observability.logging import configure_json_logging
 
 app = FastAPI(title="SASTRAVA FINESSE", version="0.1.0")
+if cfg.JSON_LOGGING:
+    configure_json_logging()
 app.add_middleware(
     CORSMiddleware, allow_origins=list(cfg.CORS_ORIGINS), allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"], allow_headers=["*"])
@@ -70,6 +83,8 @@ _LOGIN_WINDOW_S = 900
 login_throttle = LoginThrottle(limit=_LOGIN_LIMIT, window_s=_LOGIN_WINDOW_S)
 _logger = logging.getLogger("finesse.startup")
 _vercel_catalog_counts = {"services": 0, "playbooks": 0, "repositories": 0}
+_ready = False
+_draining = False
 
 
 @app.exception_handler(DataEgressBlocked)
@@ -86,6 +101,7 @@ async def security_and_login_rate_limit(request, call_next):
             response = JSONResponse({"detail": "too many login attempts"}, status_code=429)
             response.headers.update(_security_headers(request))
             return response
+    started = time.perf_counter()
     response = await call_next(request)
     if path in {"/api/login", "/hubapi/token", "/api/v1/auth/login"}:
         if response.status_code == 401:
@@ -93,6 +109,10 @@ async def security_and_login_rate_limit(request, call_next):
         elif response.status_code < 400:
             login_throttle.succeeded(ip=client_ip)
     response.headers.update(_security_headers(request))
+    matched_route = request.scope.get("route")
+    route = getattr(matched_route, "path", "/unmatched")
+    metrics.observe_http(request.method, route, response.status_code,
+                         time.perf_counter() - started)
     return response
 
 
@@ -151,6 +171,28 @@ def current_user(creds: HTTPAuthorizationCredentials = Depends(_bearer)) -> dict
     payload = decode_token(creds.credentials)
     if not payload:
         raise HTTPException(401, "invalid or expired token")
+    try:
+        if mfa_required_for(payload.get("tenant_id", "default"), payload.get("tier", 1)) \
+                and "mfa" not in payload.get("amr", []):
+            raise HTTPException(403, "MFA_REQUIRED")
+    except RuntimeError as exc:
+        raise HTTPException(503, "MFA policy storage is unavailable") from exc
+    return payload
+
+
+def mfa_challenge_user(creds: HTTPAuthorizationCredentials = Depends(_bearer)) -> dict:
+    if creds is None:
+        raise HTTPException(401, "missing MFA challenge")
+    payload = decode_token(creds.credentials)
+    if (not payload or payload.get("mfa_pending") is not True
+            or payload.get("purpose") != "mfa_login" or payload.get("tier", 0) < 1):
+        raise HTTPException(401, "invalid or expired MFA challenge")
+    record = storage.get("auth_challenges", payload.get("tenant_id", ""),
+                         payload.get("jti", ""))
+    if (not record or record.get("status") != "ISSUED"
+            or record.get("expires_at", 0) <= time.time()
+            or record.get("sub") != payload.get("sub")):
+        raise HTTPException(401, "invalid or expired MFA challenge")
     return payload
 
 
@@ -181,6 +223,19 @@ class LoginIn(BaseModel):
 class ChangePasswordIn(BaseModel):
     current_password: str = Field(min_length=1, max_length=1024)
     new_password: str = Field(min_length=1, max_length=1024)
+
+
+class MFAVerifyIn(BaseModel):
+    code: str = Field(min_length=6, max_length=33, pattern=r"^[A-Fa-f0-9-]+$")
+
+
+class TenantIdentityPolicyIn(BaseModel):
+    require_mfa: bool
+
+
+class JWKSRotationIn(BaseModel):
+    action: str = Field(pattern=r"^(publish|activate|retire)$")
+    kid: str | None = Field(default=None, min_length=1, max_length=128)
 
 
 class NewUserIn(BaseModel):
@@ -280,9 +335,46 @@ class LearningPlanIn(BaseModel):
                              pattern="^(public|internal|confidential|restricted)$")
 
 
+class KillSwitchIn(BaseModel):
+    enabled: bool
+    reason: str = Field(min_length=1, max_length=1000)
+    tenant_id: str | None = None
+
+
+class ConsentIn(BaseModel):
+    purpose_code: str = Field(min_length=1, max_length=128)
+    notice_version: str = Field(min_length=1, max_length=128)
+
+
+class BreachIncidentIn(BaseModel):
+    severity: str = Field(pattern="^(low|medium|high|critical)$")
+    affected_records_count: int = Field(ge=0, le=1_000_000_000)
+
+
+class DeliverableExportIn(BaseModel):
+    title: str = Field(min_length=1, max_length=300)
+    summary: str = Field(max_length=20_000)
+    listen: str = Field(max_length=50_000)
+    shape: str = Field(max_length=50_000)
+    deliver: str = Field(max_length=50_000)
+    sensitivity: str = Field(pattern="^(public|internal|confidential|restricted)$")
+    citations: list[dict] = Field(default_factory=list, max_length=100)
+    tenant_name: str = Field(default="SASTRAVA", min_length=1, max_length=120)
+
+
 # ---------- lifecycle ----------
 @app.on_event("startup")
 async def _startup():
+    global _ready, _draining
+    _ready = False
+    _draining = False
+    if cfg.DEPLOYMENT_MODE == "portable_ssd":
+        from .portable.license_gate import validate_portable_license
+        validate_portable_license(
+            required=cfg.PORTABLE_LICENSE_REQUIRED,
+            license_file=cfg.PORTABLE_LICENSE_FILE,
+            public_key=cfg.PORTABLE_LICENSE_PUBLIC_KEY,
+            tenant_id=cfg.PORTABLE_TENANT_ID)
     if cfg.IS_VERCEL and vercel_missing_environment():
         _logger.error(
             "Vercel backend setup is incomplete. /api/health reports the missing "
@@ -291,6 +383,7 @@ async def _startup():
         return
     validate_runtime_security()
     await store.init()
+    _ready = True
     if cfg.IS_VERCEL:
         try:
             await _seed_vercel_catalog()
@@ -347,6 +440,9 @@ async def _seed_vercel_catalog() -> None:
 
 @app.on_event("shutdown")
 async def _shutdown():
+    global _ready, _draining
+    _ready = False
+    _draining = True
     if not cfg.IS_VERCEL:
         crawler.stop_background()
 
@@ -368,11 +464,68 @@ async def login(body: LoginIn):
         login_throttle.failed(account=account)
         raise HTTPException(401, "bad credentials")
     login_throttle.succeeded(account=account)
-    token = make_token(u.email, u.role, u.tier, u.tenant_id)
+    try:
+        result = build_login_response(u, token_field="token")
+    except RuntimeError as exc:
+        raise HTTPException(503, "MFA service is unavailable") from exc
     await bus.emit("system", u.role, f"{u.name} logged in", lane=role_of(u.role).lane)
     await asyncio.to_thread(audit_log.append, u.tenant_id,
-                            {"action": "login_success", "actor": u.email, "role": u.role})
-    return {"token": token, "user": u.public()}
+                            {"action": "password_authenticated", "actor": u.email,
+                             "role": u.role})
+    return result
+
+
+@app.post("/api/auth/mfa/enroll")
+async def mfa_enroll(user: dict = Depends(mfa_challenge_user)):
+    if not user.get("mfa_enrollment_required"):
+        raise HTTPException(409, "MFA is already enrolled")
+    from .security.mfa import mfa_service
+    try:
+        setup = await asyncio.to_thread(
+            mfa_service.begin_enrollment, user["tenant_id"], user["sub"])
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(503, "MFA secret storage is unavailable") from exc
+    return setup
+
+
+@app.post("/api/auth/mfa/verify")
+async def mfa_verify(body: MFAVerifyIn, request: Request,
+                     user: dict = Depends(mfa_challenge_user)):
+    from .security.mfa import mfa_service
+    account = login_throttle.normalize_account(user["sub"])
+    client_ip = _client_ip(request)
+    if not login_throttle.allowed(ip=client_ip, account=account):
+        raise HTTPException(429, "too many MFA attempts")
+    enrollment_required = bool(user.get("mfa_enrollment_required"))
+    recovery_codes = None
+    try:
+        if enrollment_required:
+            recovery_codes = await asyncio.to_thread(
+                mfa_service.complete_enrollment, user["tenant_id"], user["sub"], body.code)
+        else:
+            verified = await asyncio.to_thread(
+                mfa_service.verify, user["tenant_id"], user["sub"], body.code)
+            if not verified:
+                login_throttle.failed(ip=client_ip, account=account)
+                raise HTTPException(401, "invalid or replayed MFA code")
+    except ValueError as exc:
+        login_throttle.failed(ip=client_ip, account=account)
+        raise HTTPException(401, "invalid or expired MFA enrollment code") from exc
+    login_throttle.succeeded(ip=client_ip, account=account)
+    if not consume_mfa_challenge(user):
+        raise HTTPException(401, "MFA challenge has already been used")
+    token = make_token(user["sub"], user["role"], user["tier"], user["tenant_id"],
+                       amr=("pwd", "mfa"))
+    await asyncio.to_thread(audit_log.append, user["tenant_id"], {
+        "action": "mfa_enrolled" if enrollment_required else "mfa_login",
+        "actor": user["sub"],
+    })
+    response = {"access_token": token, "token_type": "bearer"}
+    if recovery_codes is not None:
+        response["recovery_codes"] = recovery_codes
+    return response
 
 
 @app.post("/api/auth/change-password")
@@ -431,6 +584,71 @@ async def create_user(body: NewUserIn, user: dict = Depends(require("read:all"))
                             {"action": "user_created", "actor": user["sub"],
                              "subject": u.email, "role": u.role})
     return {"created": u.public()}
+
+
+@app.put("/api/v1/admin/tenant-security")
+async def update_tenant_identity_policy(body: TenantIdentityPolicyIn,
+                                        user: dict = Depends(current_user)):
+    if user.get("tier", 0) < 4:
+        raise HTTPException(403, "tenant security policy is restricted to L4 administrators")
+    tenant_id = user.get("tenant_id", "default")
+    record = storage.put("tenant_identity_settings", tenant_id, tenant_id, {
+        "require_mfa": body.require_mfa, "updated_by": user["sub"],
+    })
+    await asyncio.to_thread(audit_log.append, tenant_id, {
+        "action": "tenant_mfa_policy_changed", "actor": user["sub"],
+        "require_mfa": body.require_mfa,
+    })
+    return {"tenant_id": tenant_id, "require_mfa": record["require_mfa"]}
+
+
+@app.post("/api/logout")
+async def logout(user: dict = Depends(current_user)):
+    tenant_id, jti = user.get("tenant_id"), user.get("jti")
+    if isinstance(tenant_id, str) and isinstance(jti, str) and jti:
+        storage.put("revoked_sessions", tenant_id, jti, {
+            "status": "REVOKED", "sub": user.get("sub"),
+            "expires_at": user.get("exp", 0),
+        })
+    return {"logged_out": True}
+
+
+@app.get("/.well-known/jwks.json")
+async def published_jwks():
+    try:
+        return jwks_manager.jwks()
+    except RuntimeError as exc:
+        raise HTTPException(503, "JWKS storage is unavailable") from exc
+
+
+@app.post("/api/v1/admin/jwks/rotate")
+async def rotate_jwks(body: JWKSRotationIn, user: dict = Depends(current_user)):
+    if user.get("tier", 0) < 4 or "mfa" not in user.get("amr", []):
+        raise HTTPException(403, "JWKS rotation is restricted to MFA-authenticated L4 administrators")
+    if cfg.JWT_ALGORITHM != "EDDSA":
+        raise HTTPException(409, "set JWT_ALGORITHM=EdDSA before rotating application signing keys")
+    try:
+        if body.action == "publish":
+            record = jwks_manager.publish_rotation_key()
+            result = {"action": "publish", "kid": record["kid"],
+                      "status": record["status"]}
+        elif body.action == "activate":
+            if not body.kid:
+                raise HTTPException(422, "kid is required for activation")
+            result = {"action": "activate",
+                      **jwks_manager.activate_rotation_key(body.kid)}
+        else:
+            result = {"action": "retire",
+                      "retired_kids": jwks_manager.retire_expired()}
+    except JWTKeyError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(503, "JWKS signing-key storage is unavailable") from exc
+    await asyncio.to_thread(audit_log.append, user.get("tenant_id", "default"), {
+        "action": "jwks_rotation_" + body.action,
+        "actor": user["sub"], "kid": body.kid or result.get("kid"),
+    })
+    return result
 
 
 @app.get("/api/users")
@@ -1195,6 +1413,28 @@ async def health():
     return JSONResponse({"status": "online"})
 
 
+@app.get("/healthz")
+async def healthz():
+    return JSONResponse({"status": "alive"})
+
+
+@app.get("/readyz")
+async def readyz():
+    if _draining or not _ready:
+        return JSONResponse({"status": "not_ready", "draining": _draining}, status_code=503)
+    return JSONResponse({"status": "ready", "store": store.backend_name()})
+
+
+@app.get("/metrics", dependencies=[Depends(require("read:all"))], include_in_schema=True)
+async def metrics_route(request: Request, x_metrics_token: str = Header(default="")):
+    remote = _remote_ip(request)
+    if not cfg.METRICS_TOKEN or not hmac.compare_digest(x_metrics_token, cfg.METRICS_TOKEN):
+        raise HTTPException(404, "metrics endpoint is not configured")
+    if not ipaddress.ip_address(remote).is_private and not ipaddress.ip_address(remote).is_loopback:
+        raise HTTPException(403, "metrics endpoint is internal only")
+    return Response(metrics.render(), media_type="text/plain; version=0.0.4; charset=utf-8")
+
+
 @app.get("/api/health")
 async def api_health():
     missing = vercel_missing_environment() if cfg.IS_VERCEL else []
@@ -1223,11 +1463,115 @@ async def platform_runtime():
     }
 
 
+@app.put("/api/v1/admin/kill-switches/{flag_key}")
+async def update_kill_switch(flag_key: str, body: KillSwitchIn,
+                             user: dict = Depends(require_tier(4))):
+    tenant_id = body.tenant_id or user.get("tenant_id", "default")
+    if tenant_id != user.get("tenant_id", "default") and user.get("role") != "CEO":
+        raise HTTPException(403, "tenant-scoped administrator cannot change another tenant's switch")
+    if tenant_id == "__global__" and user.get("role") != "CEO":
+        raise HTTPException(403, "global kill switches require the platform CEO")
+    try:
+        return kill_switches.set(flag_key, body.enabled, tenant_id=tenant_id,
+                                 actor=user.get("sub", ""), reason=body.reason)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@app.post("/api/v1/compliance/consent")
+async def grant_compliance_consent(body: ConsentIn, user: dict = Depends(current_user)):
+    return compliance.grant_consent(user.get("tenant_id", "default"), user["sub"],
+                                    body.purpose_code, body.notice_version)
+
+
+@app.post("/api/v1/compliance/consent/{consent_id}/withdraw")
+async def withdraw_compliance_consent(consent_id: str, user: dict = Depends(current_user)):
+    tenant_id = user.get("tenant_id", "default")
+    record = storage.get("consent_records", tenant_id, consent_id)
+    if not record or record.get("principal_id") != user["sub"]:
+        raise HTTPException(404, "consent record not found")
+    return compliance.withdraw_consent(tenant_id, consent_id, actor=user["sub"])
+
+
+@app.post("/api/v1/compliance/breach-incidents")
+async def open_breach_incident(body: BreachIncidentIn,
+                               user: dict = Depends(require_tier(4))):
+    return compliance.create_breach_incident(
+        user.get("tenant_id", "default"), body.severity, body.affected_records_count)
+
+
+@app.get("/api/v1/compliance/evidence")
+async def compliance_evidence(user: dict = Depends(require_tier(4))):
+    return {
+        "notice": "Engineering evidence index only; not a compliance attestation.",
+        "tenant_id": user.get("tenant_id", "default"),
+        "controls": {
+            "forced_rls": "ordered SQL migrations; live database validation required",
+            "audit_integrity": "hash-chained audit log",
+            "sensitive_egress": "local-only confidential/restricted routing unless explicitly overridden",
+            "mfa_scim": "local TOTP and scoped SCIM implementations; external IdP integration incomplete",
+            "retention": "candidate planner only; no automated deletion",
+            "recovery": "portable SQLite backup helper; PostgreSQL/Qdrant recovery drill incomplete",
+        },
+        "independent_assessment": False,
+        "legal_review": False,
+    }
+
+
+@app.post("/api/v1/exports/docx")
+async def export_docx(body: DeliverableExportIn, user: dict = Depends(current_user)):
+    tier = int(user.get("tier", 0))
+    if body.sensitivity == "restricted":
+        raise HTTPException(403, "restricted deliverables cannot be exported")
+    if body.sensitivity == "confidential" and tier < 4:
+        raise HTTPException(403, "confidential export requires L4")
+    if body.sensitivity == "internal" and tier < 3:
+        raise HTTPException(403, "internal export requires L3 or L4")
+    from .auth.rbac import permitted_lanes
+    tenant_id = user.get("tenant_id", "default")
+    citations = resolve_verified_citations(
+        body.citations, tenant_id=tenant_id, principal_id=user["sub"],
+        allowed_lanes=permitted_lanes(user["role"]), max_sensitivity=body.sensitivity,
+        get_document=storage.get)
+    content = build_docx(
+        title=body.title, summary=body.summary, listen=body.listen, shape=body.shape,
+        deliver=body.deliver, sensitivity=body.sensitivity, citations=citations,
+        tenant_name=body.tenant_name)
+    import hashlib
+    await asyncio.to_thread(audit_log.append, tenant_id, {
+        "event": "deliverable.exported", "format": "docx", "sensitivity": body.sensitivity,
+        "actor": user["sub"], "title_sha256": hashlib.sha256(body.title.encode()).hexdigest()})
+    return Response(content=content,
+                     media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                     headers={"Content-Disposition": "attachment; filename=finesse-deliverable.docx"})
+
+
 # the galaxy's backend, powered entirely by FINESSE agents
 from .hub_api import router as _hub_router  # noqa: E402
 app.include_router(_hub_router)
 from .sales.router_v1 import router as _sales_router  # noqa: E402
 app.include_router(_sales_router)
+app.include_router(_scim_router)
+
+
+@app.delete("/api/v1/knowledge/documents/{doc_id}")
+async def tombstone_knowledge_document(doc_id: str, user: dict = Depends(current_user)):
+    tenant_id = str(user.get("tenant_id", "default"))
+    record = document_lifecycle.get(tenant_id, doc_id)
+    if not record:
+        raise HTTPException(404, "knowledge document not found")
+    from .auth.rbac import permitted_lanes
+    if user.get("tier", 0) < 3 and record.get("lane") not in permitted_lanes(user["role"]):
+        raise HTTPException(404, "knowledge document not found")
+    try:
+        result = await document_lifecycle.tombstone(tenant_id, doc_id, user["sub"])
+    except KeyError as exc:
+        raise HTTPException(404, "knowledge document not found") from exc
+    await asyncio.to_thread(audit_log.append, tenant_id, {
+        "action": "knowledge_document_tombstoned", "actor": user["sub"],
+        "document_id": doc_id,
+    })
+    return result
 
 
 @app.post("/api/admin/emergency-stop")

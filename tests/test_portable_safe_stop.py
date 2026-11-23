@@ -3,7 +3,8 @@ import sqlite3
 
 import pytest
 
-from scripts.portable_safe_stop import _active_jobs, checkpoint_and_backup
+from scripts.portable_safe_stop import (_active_jobs, checkpoint_and_backup,
+                                        create_portable_bundle)
 
 
 def _job_store(path, *statuses):
@@ -36,3 +37,21 @@ def test_checkpoint_makes_integrity_checked_backup_and_refuses_overwrite(tmp_pat
         assert connection.execute("SELECT count(*) FROM jobs").fetchone()[0] == 1
     with pytest.raises(FileExistsError):
         checkpoint_and_backup(database, backup)
+
+
+def test_portable_bundle_contains_hash_manifest_and_qdrant_vault_data(tmp_path):
+    backup = tmp_path / "backups" / "platform.db"
+    backup.parent.mkdir()
+    _job_store(backup, "complete")
+    qdrant = tmp_path / "data" / "qdrant"
+    qdrant.mkdir(parents=True)
+    (qdrant / "vectors.bin").write_bytes(b"synthetic-vector-store")
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    (vault / "note.md").write_text("synthetic note", encoding="utf-8")
+    bundle = create_portable_bundle(backup, qdrant_dir=qdrant, vault_dir=vault)
+    manifest = json.loads((bundle / "manifest.json").read_text(encoding="utf-8"))
+    assert {item["path"] for item in manifest["files"]} == {
+        "platform.db", "qdrant/vectors.bin", "vault.tar.gz"}
+    with pytest.raises(FileExistsError):
+        create_portable_bundle(backup, qdrant_dir=qdrant, vault_dir=vault)

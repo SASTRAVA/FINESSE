@@ -29,6 +29,18 @@ def _i(name: str, default: int) -> int:
         return default
 
 
+def _f(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _bool(name: str, default: bool) -> bool:
+    value = os.environ.get(name)
+    return default if value is None else value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _csv(name: str, default: str) -> tuple[str, ...]:
     values = tuple(value.strip() for value in _b(name, default).split(",") if value.strip())
     if "*" in values:
@@ -90,6 +102,7 @@ class Config:
     _DEFAULT_ENV = ("production" if IS_VERCEL and _VERCEL_ENV == "production"
                     else "development")
     ENV = (_b("FINESSE_ENV") or _b("ENVIRONMENT") or _b("ENV") or _DEFAULT_ENV).lower()
+    DEPLOYMENT_MODE = _b("DEPLOYMENT_MODE", "server").lower()
     HOST = _b("HOST", _b("APP_HOST", "127.0.0.1"))
     PORT = _i("PORT", _i("APP_PORT", 8600))
     APP_HOST = HOST
@@ -103,6 +116,10 @@ class Config:
     ALLOW_UNENCRYPTED_PUBLIC_BIND = _b(
         "ALLOW_UNENCRYPTED_PUBLIC_BIND", "false").lower() in ("1", "true", "yes")
     REDIS_URL = _b("REDIS_URL")
+    JSON_LOGGING = _bool("JSON_LOGGING", True)
+    METRICS_TOKEN = _b("METRICS_TOKEN")
+    LLM_CONTEXT_TOKENS = max(1024, _i("LLM_CONTEXT_TOKENS", 32768))
+    COMPACTION_TRIGGER_RATIO = min(0.95, max(0.1, _f("COMPACTION_TRIGGER_RATIO", 0.7)))
     DATABASE_URL = _b("DATABASE_URL")
     KMS_MASTER_KEY = _b("KMS_MASTER_KEY") or _b("MASTER_KEY")
     KMS_KEY_ID = _b("KMS_KEY_ID", "default-v1")
@@ -183,6 +200,8 @@ class Config:
     QDRANT_URL = _b("QDRANT_URL")
     QDRANT_API_KEY = _b("QDRANT_API_KEY")
     QDRANT_COLLECTION = _b("QDRANT_COLLECTION", "sastrava_brain")
+    QDRANT_HYBRID_ENABLED = _bool("QDRANT_HYBRID_ENABLED", False)
+    QDRANT_FUSION = _b("QDRANT_FUSION", "RRF").upper()
 
     # --- auth ---
     JWT_SECRET = _b("JWT_SECRET")
@@ -192,6 +211,10 @@ class Config:
     JWT_ALGORITHM = _b("JWT_ALGORITHM", "HS256").upper()
     CEO_EMAIL = _b("CEO_EMAIL") or _b("CEO_USERNAME", "ceo@sastrava.ai")
     CEO_PASSWORD = _b("CEO_PASSWORD") or _b("CEO_LOGIN_PASSWORD")
+    PORTABLE_LICENSE_REQUIRED = _bool("PORTABLE_LICENSE_REQUIRED", False)
+    PORTABLE_LICENSE_FILE = _b("PORTABLE_LICENSE_FILE", str(DATA_DIR / "license.json"))
+    PORTABLE_LICENSE_PUBLIC_KEY = _b("PORTABLE_LICENSE_PUBLIC_KEY")
+    PORTABLE_TENANT_ID = _b("PORTABLE_TENANT_ID", "default")
 
     # --- obsidian ---
     OBSIDIAN_REST_URL = _b("OBSIDIAN_REST_URL")
@@ -233,7 +256,10 @@ class Config:
     GITHUB_TOKEN = _b("GITHUB_TOKEN")
 
     # --- agentic loop (Hermes/Claude-style autonomous reasoning) ---
-    AGENTIC_MAX_STEPS = _i("AGENTIC_MAX_STEPS", 8)     # max plan->act->observe iterations
+    AGENTIC_MAX_STEPS = min(12, max(1, _i("AGENTIC_MAX_STEPS", 8)))
+    MONTHLY_LLM_TOKEN_LIMIT = max(1, _i("MONTHLY_LLM_TOKEN_LIMIT", 1_000_000))
+    DAILY_USER_LLM_TOKEN_LIMIT = max(1, _i("DAILY_USER_LLM_TOKEN_LIMIT", 100_000))
+    LOCAL_LLM_MAX_CONCURRENCY = max(1, _i("LOCAL_LLM_MAX_CONCURRENCY", 2))
     AGENTIC_REFLECT = _b("AGENTIC_REFLECT", "1") in ("1", "true", "yes")  # self-critique pass
 
     # --- security audit agent (continuous, opt-in watch loop) ---
@@ -286,8 +312,15 @@ def validate_runtime_security(config=None) -> None:
                 any(marker in lowered for marker in ("paste_", "generate_", "set_a_strong_")))
 
     problems = []
-    if getattr(config, "JWT_ALGORITHM", "HS256") != "HS256":
-        problems.append("JWT_ALGORITHM is restricted to HS256")
+    if getattr(config, "DEPLOYMENT_MODE", "server") not in {"server", "portable_ssd"}:
+        problems.append("DEPLOYMENT_MODE must be 'server' or 'portable_ssd'")
+    jwt_algorithm = getattr(config, "JWT_ALGORITHM", "HS256")
+    if jwt_algorithm not in {"HS256", "EDDSA"}:
+        problems.append("JWT_ALGORITHM must be HS256 or EdDSA")
+    if jwt_algorithm == "EDDSA":
+        master_key = str(getattr(config, "KMS_MASTER_KEY", "") or "").strip()
+        if len(master_key.encode("utf-8")) < 32 or is_placeholder(master_key):
+            problems.append("EdDSA JWT signing requires a non-placeholder KMS_MASTER_KEY")
     if not 1 <= int(getattr(config, "ACCESS_TOKEN_EXPIRE_MINUTES", 720)) <= 10080:
         problems.append("ACCESS_TOKEN_EXPIRE_MINUTES must be between 1 and 10080")
     jwt_secret = str(getattr(config, "JWT_SECRET", "") or "").strip()
@@ -329,13 +362,17 @@ def vercel_missing_auth_environment(config=None) -> list[str]:
                        for marker in ("paste_", "generate_", "set_a_strong_")))
 
     missing = []
-    if getattr(config, "JWT_ALGORITHM", "HS256") != "HS256":
-        missing.append("JWT_ALGORITHM (HS256 required)")
+    jwt_algorithm = getattr(config, "JWT_ALGORITHM", "HS256")
+    if jwt_algorithm not in {"HS256", "EDDSA"}:
+        missing.append("JWT_ALGORITHM (HS256 or EdDSA required)")
     if not 1 <= int(getattr(config, "ACCESS_TOKEN_EXPIRE_MINUTES", 720)) <= 10080:
         missing.append("ACCESS_TOKEN_EXPIRE_MINUTES (must be 1..10080)")
     jwt_secret = str(getattr(config, "JWT_SECRET", "") or "").strip()
     if len(jwt_secret.encode("utf-8")) < 32 or unsafe(jwt_secret):
         missing.append("JWT_SECRET")
+    if (jwt_algorithm == "EDDSA"
+            and len(str(getattr(config, "KMS_MASTER_KEY", "") or "").encode()) < 32):
+        missing.append("KMS_MASTER_KEY (32+ bytes required for EdDSA signing keys)")
     password = str(getattr(config, "CEO_PASSWORD", "") or "").strip()
     if (len(password) < 12 or len(password.encode("utf-8")) > 72
             or unsafe(password)):

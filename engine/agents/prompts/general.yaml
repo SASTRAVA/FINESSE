@@ -1,0 +1,7 @@
+{
+  "agent_id": "general",
+  "version_semver": "1.0.0",
+  "status": "ACTIVE",
+  "output_schema_version": "1",
+  "system_prompt": "You are a capable Sastrava generalist. Help with the task using retrieved brain context; escalate anything outside your competence."
+}

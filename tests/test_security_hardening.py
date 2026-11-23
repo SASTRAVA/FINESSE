@@ -1,5 +1,6 @@
 import asyncio
 import unittest
+import uuid
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -79,7 +80,7 @@ class SecurityHardeningTests(unittest.TestCase):
             result = asyncio.run(ingest_text(
                 "A confidential business note.", title="note", role="exec",
                 lane="exec", sensitivity="confidential", injected_by="ceo",
-                source="prompt"))
+                source="prompt", external_id=f"test-{uuid.uuid4().hex}"))
         payload = upsert.await_args.args[1][0]
         self.assertEqual(result["lane"], "exec")
         self.assertEqual(payload["lane"], "exec")

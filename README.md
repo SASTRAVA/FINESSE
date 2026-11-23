@@ -51,7 +51,7 @@ The conjunction engine selects review-only workflow plans and explicitly
 reports that it performed no external side effects. `engine/db/storage.py`
 provides tenant-keyed SQLite JSON persistence in local and test environments.
 With PostgreSQL 16+, startup applies pending migrations, checks that the app
-role cannot bypass RLS, and verifies all 25 tenant tables have forced RLS
+role cannot bypass RLS, and verifies all 50 tenant tables have forced RLS
 policies. Append-only audit events and heads have separate tenant RLS policies.
 `ENVIRONMENT=production` refuses SQLite and `/tmp` fallback.
 `REDIS_URL` enables shared login throttling, atomic Gatekeeper nonces, and
@@ -60,12 +60,21 @@ event-stream fan-out. Remote Qdrant uses `QDRANT_URL` and optional
 when the configured cluster is unavailable. Some session, account, and runtime
 state remains file-backed or process-local.
 
+Native Qdrant dense + BM25 RRF/DBSF can be enabled with
+`QDRANT_HYBRID_ENABLED=true` against a remote Qdrant 1.15.3+ deployment. It
+requires a fresh named-vector collection; the app refuses to reinterpret an
+existing unnamed-vector collection. `QDRANT_FUSION` selects `RRF` (default) or
+`DBSF`. A live Qdrant endpoint was not available for this repository audit.
+
 Operator WebSocket connections use short-lived, single-use tickets and an
 Origin allowlist instead of putting bearer tokens in WebSocket URLs. Uploads
 are checked for expected file signatures and bounded archive expansion before
 they are persisted. Tenant-scoped retrieval combines dense and lexical ranks
-and returns citation references. These controls have automated regression
-coverage; they do not replace a production security assessment.
+and returns citation references. L3/L4 password sign-ins require TOTP MFA;
+tenants can require MFA for every role, with Argon2id recovery codes. These
+controls have automated regression coverage; they do not replace a production
+security assessment. SCIM directory provisioning is implemented behind scoped
+tenant tokens; OIDC/SAML federation remains unimplemented.
 
 Sales lead generation uses deterministic synthetic records while
 `SALES_DRY_RUN=true` (the default). Email and voice adapters, enrichment, and
@@ -270,44 +279,30 @@ link to it. Its typed React/Vite source lives in `frontend/`.
 
 ## Deploy to Vercel (Live Website Quickstart)
 
-Vercel serves the Python FastAPI app through `api/index.py` and builds the
-React/TypeScript workspace from `frontend/`. The root [vercel.json](vercel.json)
-contains the build command, routing rewrites, and baseline security headers.
+Vercel builds and serves the React workspace as static files only. The root
+[vercel.json](vercel.json) contains the build command, SPA rewrites, legacy
+dashboard redirects, and security headers. Deploy the stateful FastAPI API
+separately; this repository does not create that service or its database,
+Redis, and Qdrant resources.
 
 1. Import `SASTRAVA/FINESSE` into Vercel and keep the project Root Directory at
    `.`. Use FastAPI/Python framework detection (or Other); do not configure a
    second build or output directory in the dashboard because `vercel.json`
    provides both. Vercel CLI 48.1.8 or newer is required for local `vercel dev`.
-2. Add these Environment Variables to **Preview** and **Production** (and
-   Development if you use Vercel CLI):
-   - `CEO_EMAIL` — the initial administrator account.
-   - `CEO_PASSWORD` — unique password, at least 12 characters and no more than
-     bcrypt's 72-byte limit.
-   - `JWT_SECRET` — independently generated random value of at least 32 bytes.
-   - `KMS_MASTER_KEY` — separate random value of at least 32 bytes for
-     encrypting provider credentials.
-3. Optionally configure `NVIDIA_API_KEY`, `GROQ_API_KEY`, `DATABASE_URL` (a
-   managed PostgreSQL URL), `QDRANT_URL` (a managed Qdrant URL), and
-   `REDIS_URL`. Vercel-provided `VERCEL_URL` and
-   `VERCEL_PROJECT_PRODUCTION_URL` are automatically added to the CORS
-   allowlist. Add a custom frontend origin to `CORS_ORIGINS` if it is not
-   represented by those Vercel hostnames.
+2. Set `VITE_API_BASE_URL` and `VITE_WS_BASE_URL` to the separately deployed
+   backend's HTTPS and WSS origins before the Vercel build. Keep them blank
+   only when the static client and stateful backend share one origin.
+3. Configure `CEO_EMAIL`, `CEO_PASSWORD`, `JWT_SECRET`, `KMS_MASTER_KEY`,
+   `DATABASE_URL`, `REDIS_URL`, `QDRANT_URL`, model providers, and `CORS_ORIGINS`
+   on the backend host. Do not place backend secrets in Vercel's frontend build
+   environment; `VITE_*` values are public browser configuration.
 
-For local serverless-style testing, install the Vercel CLI and run
-`vercel dev` from the repository root after configuring Development variables.
-Test `/api/health`, `/api/v1/platform/runtime`, `/workspace/`, `/dashboard`,
-`/command`, and `/jarvis`.
+Validate the static site with `npm run build` in `frontend/`, then test API and
+WebSocket connectivity against the separately hosted backend. Legacy `/dashboard`,
+`/command`, `/jarvis`, and `/voice` URLs redirect to workspace routes.
 
-Vercel's `/tmp` storage is writable but ephemeral and isolated per function
-instance. FINESSE automatically puts local data, vault, and Qdrant files there
-when their paths are not overridden. Cold starts bootstrap the CEO and public
-catalog from configured environment values. For shared durable platform
-records, configure managed PostgreSQL; for shared durable vectors, configure
-managed Qdrant. The legacy account JSON store and vault files remain
-instance-local/ephemeral, so do not rely on Vercel filesystem state for durable
-user provisioning, password changes, uploads, or generated vault documents.
-The runtime status badge reports whether required setup is present and whether
-sales providers remain in dry-run mode.
+The static Vercel deployment has no local data filesystem and does not bootstrap
+accounts or seed catalogs. Those stateful operations belong to the API service.
 
 Local vault content, uploads, user records,
 vector data, audit logs, and credentials are intentionally excluded from this

@@ -41,13 +41,13 @@ class ProductionContractSuites(unittest.TestCase):
         bindings = [(method, prefix + route.path) for route, prefix in routes
                     if prefix + route.path not in doc_routes
                     for method in route.methods or () if method not in {"HEAD", "OPTIONS"}]
-        self.assertEqual(len(bindings), 135)
+        self.assertEqual(len(bindings), 164)
         self.assertTrue(any(path.startswith("/api/v1/") for _, path in bindings))
 
     def test_suite_02_postgres_rls_schema(self):
         from engine.db.storage import TABLES
         sql = "\n".join(path.read_text() for path in (ROOT / "migrations").glob("*.sql"))
-        self.assertEqual(len(TABLES), 25)
+        self.assertEqual(len(TABLES), 50)
         self.assertIn("ENABLE ROW LEVEL SECURITY", sql)
         self.assertIn("FORCE ROW LEVEL SECURITY", sql)
         for table in TABLES:

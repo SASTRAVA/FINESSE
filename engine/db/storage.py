@@ -18,6 +18,31 @@ TABLES = (
     "scan_evidence", "catalog_repositories",
     "tenant_secrets",
     "ws_tickets",
+    "user_mfa_factors",
+    "auth_challenges",
+    "tenant_identity_settings",
+    "jwks_signing_keys",
+    "revoked_sessions",
+    "auth_sessions",
+    "scim_tokens",
+    "scim_token_index",
+    "tenant_encryption_keys",
+    "knowledge_documents",
+    "knowledge_document_versions",
+    "connector_sync_states",
+    "prompt_templates",
+    "tenant_llm_budgets",
+    "llm_usage_ledger",
+    "approval_channel_configs",
+    "mcp_server_registrations",
+    "outbound_webhooks",
+    "webhook_deliveries",
+    "client_portals",
+    "portal_shared_deliverables",
+    "billing_meter_events",
+    "breach_incidents",
+    "dsar_erasure_requests",
+    "feature_kill_switches",
 )
 
 
@@ -55,7 +80,9 @@ class PlatformStorage:
             # committed transaction durable across an unexpected drive removal.
             self._connection.execute("PRAGMA journal_mode=WAL")
             self._connection.execute("PRAGMA synchronous=FULL")
+            self._connection.execute("PRAGMA foreign_keys=ON")
             self._connection.execute("PRAGMA busy_timeout=5000")
+            self._connection.execute("PRAGMA wal_autocheckpoint=500")
         self._initialize()
 
     def _verify_postgres_version(self) -> None:
@@ -256,8 +283,8 @@ class PlatformStorage:
     def take_once(self, table: str, tenant_id: str, record_id: str) -> dict | None:
         """Atomically return and consume an unexpired ISSUED record."""
         self._validate(table, tenant_id)
-        if table != "ws_tickets":
-            raise ValueError("single-use consumption is only supported for ws_tickets")
+        if table not in {"ws_tickets", "auth_challenges"}:
+            raise ValueError("single-use consumption is not supported for this table")
         now = time.time()
         with self.transaction(tenant_id) as connection:
             query = f'SELECT data_json FROM "{table}" WHERE tenant_id=? AND record_id=?'

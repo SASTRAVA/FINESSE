@@ -9,6 +9,14 @@
       "security": []
     },
     {
+      "authenticated": false,
+      "method": "GET",
+      "operation_id": "published_jwks__well_known_jwks_json_get",
+      "path": "/.well-known/jwks.json",
+      "public_reason": "Publishes public JWT verification keys only; private signing material is never returned.",
+      "security": []
+    },
+    {
       "authenticated": true,
       "method": "POST",
       "operation_id": "activate_emergency_stop_route_api_admin_emergency_stop_post",
@@ -73,6 +81,30 @@
       "method": "POST",
       "operation_id": "change_password_api_auth_change_password_post",
       "path": "/api/auth/change-password",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "mfa_enroll_api_auth_mfa_enroll_post",
+      "path": "/api/auth/mfa/enroll",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "mfa_verify_api_auth_mfa_verify_post",
+      "path": "/api/auth/mfa/verify",
       "public_reason": null,
       "security": [
         {
@@ -263,6 +295,18 @@
       "path": "/api/login",
       "public_reason": "Credential exchange; login throttling and password verification apply.",
       "security": []
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "logout_api_logout_post",
+      "path": "/api/logout",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
     },
     {
       "authenticated": true,
@@ -481,6 +525,66 @@
       "method": "POST",
       "operation_id": "emergency_stop_api_v1_admin_emergency_stop_post",
       "path": "/api/v1/admin/emergency-stop",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "rotate_jwks_api_v1_admin_jwks_rotate_post",
+      "path": "/api/v1/admin/jwks/rotate",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "PUT",
+      "operation_id": "update_kill_switch_api_v1_admin_kill_switches__flag_key__put",
+      "path": "/api/v1/admin/kill-switches/{flag_key}",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "create_scim_token_api_v1_admin_scim_tokens_post",
+      "path": "/api/v1/admin/scim/tokens",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "DELETE",
+      "operation_id": "revoke_scim_token_api_v1_admin_scim_tokens__token_id__delete",
+      "path": "/api/v1/admin/scim/tokens/{token_id}",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "PUT",
+      "operation_id": "update_tenant_identity_policy_api_v1_admin_tenant_security_put",
+      "path": "/api/v1/admin/tenant-security",
       "public_reason": null,
       "security": [
         {
@@ -751,8 +855,56 @@
     {
       "authenticated": true,
       "method": "POST",
+      "operation_id": "open_breach_incident_api_v1_compliance_breach_incidents_post",
+      "path": "/api/v1/compliance/breach-incidents",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
       "operation_id": "compliance_check_api_v1_compliance_check_post",
       "path": "/api/v1/compliance/check",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "grant_compliance_consent_api_v1_compliance_consent_post",
+      "path": "/api/v1/compliance/consent",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "withdraw_compliance_consent_api_v1_compliance_consent__consent_id__withdraw_post",
+      "path": "/api/v1/compliance/consent/{consent_id}/withdraw",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "GET",
+      "operation_id": "compliance_evidence_api_v1_compliance_evidence_get",
+      "path": "/api/v1/compliance/evidence",
       "public_reason": null,
       "security": [
         {
@@ -886,6 +1038,18 @@
     },
     {
       "authenticated": true,
+      "method": "POST",
+      "operation_id": "export_docx_api_v1_exports_docx_post",
+      "path": "/api/v1/exports/docx",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
       "method": "GET",
       "operation_id": "list_icps_api_v1_icps_get",
       "path": "/api/v1/icps",
@@ -925,6 +1089,18 @@
       "method": "POST",
       "operation_id": "cancel_job_api_v1_jobs__job_id__cancel_post",
       "path": "/api/v1/jobs/{job_id}/cancel",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "DELETE",
+      "operation_id": "tombstone_knowledge_document_api_v1_knowledge_documents__doc_id__delete",
+      "path": "/api/v1/knowledge/documents/{doc_id}",
       "public_reason": null,
       "security": [
         {
@@ -1457,6 +1633,14 @@
       "security": []
     },
     {
+      "authenticated": false,
+      "method": "GET",
+      "operation_id": "healthz_healthz_get",
+      "path": "/healthz",
+      "public_reason": "Liveness probe returns only a generic alive status.",
+      "security": []
+    },
+    {
       "authenticated": true,
       "method": "GET",
       "operation_id": "hub_queue_hubapi_gatekeeper_queue_get",
@@ -1523,6 +1707,158 @@
       "path": "/jarvis",
       "public_reason": "Static sign-in page; application data APIs enforce authentication.",
       "security": []
+    },
+    {
+      "authenticated": true,
+      "method": "GET",
+      "operation_id": "metrics_route_metrics_get",
+      "path": "/metrics",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": false,
+      "method": "GET",
+      "operation_id": "readyz_readyz_get",
+      "path": "/readyz",
+      "public_reason": "Readiness probe returns only process readiness and backend name.",
+      "security": []
+    },
+    {
+      "authenticated": true,
+      "method": "GET",
+      "operation_id": "list_groups_scim_v2_Groups_get",
+      "path": "/scim/v2/Groups",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "GET",
+      "operation_id": "get_group_scim_v2_Groups__group_id__get",
+      "path": "/scim/v2/Groups/{group_id}",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "PATCH",
+      "operation_id": "patch_group_scim_v2_Groups__group_id__patch",
+      "path": "/scim/v2/Groups/{group_id}",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "GET",
+      "operation_id": "schemas_scim_v2_Schemas_get",
+      "path": "/scim/v2/Schemas",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "GET",
+      "operation_id": "service_provider_config_scim_v2_ServiceProviderConfig_get",
+      "path": "/scim/v2/ServiceProviderConfig",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "GET",
+      "operation_id": "list_users_scim_v2_Users_get",
+      "path": "/scim/v2/Users",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "POST",
+      "operation_id": "create_user_scim_v2_Users_post",
+      "path": "/scim/v2/Users",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "DELETE",
+      "operation_id": "delete_user_scim_v2_Users__user_id__delete",
+      "path": "/scim/v2/Users/{user_id}",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "GET",
+      "operation_id": "get_user_scim_v2_Users__user_id__get",
+      "path": "/scim/v2/Users/{user_id}",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "PATCH",
+      "operation_id": "patch_user_scim_v2_Users__user_id__patch",
+      "path": "/scim/v2/Users/{user_id}",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
+    },
+    {
+      "authenticated": true,
+      "method": "PUT",
+      "operation_id": "replace_user_scim_v2_Users__user_id__put",
+      "path": "/scim/v2/Users/{user_id}",
+      "public_reason": null,
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ]
     },
     {
       "authenticated": false,

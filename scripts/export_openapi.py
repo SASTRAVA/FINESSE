@@ -13,6 +13,7 @@ if str(ROOT) not in sys.path:
 OUTPUT = ROOT / "docs" / "security" / "route_auth_inventory.json"
 
 PUBLIC_REASONS = {
+    ("GET", "/.well-known/jwks.json"): "Publishes public JWT verification keys only; private signing material is never returned.",
     ("POST", "/api/login"): "Credential exchange; login throttling and password verification apply.",
     ("GET", "/api/roles"): "Non-sensitive role names support the sign-in client.",
     ("GET", "/"): "Static sign-in page; application data APIs enforce authentication.",
@@ -23,6 +24,8 @@ PUBLIC_REASONS = {
     ("GET", "/jarvis"): "Static sign-in page; application data APIs enforce authentication.",
     ("GET", "/command"): "Static sign-in page; application data APIs enforce authentication.",
     ("GET", "/health"): "Liveness probe returns only a generic online status.",
+    ("GET", "/healthz"): "Liveness probe returns only a generic alive status.",
+    ("GET", "/readyz"): "Readiness probe returns only process readiness and backend name.",
     ("GET", "/api/health"): "Setup diagnostic returns only missing setting names, never values.",
     ("GET", "/api/v1/platform/runtime"): "Public deployment readiness booleans and counts only.",
     ("POST", "/hubapi/token"): "Credential exchange; login throttling and password verification apply.",

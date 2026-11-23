@@ -62,6 +62,17 @@ Invoke-RestMethod http://127.0.0.1:8600/health
 Invoke-RestMethod http://127.0.0.1:8600/api/health
 ```
 
+On Windows, `scripts/finesse-start.ps1` validates Compose, starts the stack,
+waits for `/readyz`, and opens the workspace. Stop with
+`scripts/finesse-stop.ps1`; it waits for active jobs and checkpoints/backups
+SQLite before reporting that the stack stopped.
+
+On Linux/macOS, use `bash scripts/finesse-start.sh` and
+`bash scripts/finesse-stop.sh`. Safe stop waits for active work, stops the
+Compose services, checkpoints SQLite, verifies a SQLite backup, and writes a
+hashed bundle containing the database snapshot, local Qdrant files, and vault
+archive. Keep the source SSD connected until the scripts complete.
+
 Change `FINESSE_PORT` in `.env.portable` when port 8600 is already in use, then
 use that port for both health checks. Confirm both services report healthy,
 sign in through the local workspace, and make one non-sensitive local-model
@@ -88,6 +99,7 @@ authentication and encryption keys; protect it separately from the database.
 | Embedded database and local vectors | SQLite WAL from `engine/db/storage.py`; embedded Qdrant at `/app/data/qdrant`. | Implemented for one local server instance. |
 | Offline operation and blocked egress | Compose `isolated` network is `internal: true`; cloud keys, telemetry, crawlers, harvesters, and live provider effects are disabled. | Container egress is isolated at runtime. Docker image/model staging and host software updates require a connected setup phase. |
 | Reduce flash writes and recover from interrupted writes | SQLite WAL with `synchronous=FULL`; container `/tmp` is a RAM-backed tmpfs. | Implemented in software; abrupt physical removal can still interrupt writes and is not a substitute for drive testing or backups. |
+| Bound local model memory pressure | Portable Compose caps FINESSE local inference concurrency at 2 and Ollama parallel requests at 2 with one loaded model by default. | Software defaults only; tune and measure on the selected GPU/CPU and model. |
 | Encrypted SSD, physical PIN/FIDO unlock, rugged enclosure | No hardware control code in this repository. | Requires purchase/configuration of a compatible encrypted drive and validation by its vendor. |
 | Bootable hardened live OS and zero host traces | The portable server runs under the host's Docker Engine. | Not implemented. Requires a separate bootable Linux image and hardware/firmware validation; Docker also uses host-managed storage and logs. |
 | Automatic paired-drive incremental backup | The runbook documents a stopped-service backup set. | Manual backup only; automatic dual-drive sync and restore testing remain future work. |

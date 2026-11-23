@@ -46,6 +46,12 @@ jobs:
         run: npm audit --audit-level=moderate
       - name: Run unit and integration tests
         run: python -m pytest tests/ -v
+      - name: Run deterministic LLM evaluation smoke checks
+        run: python -m pytest tests/evals/ -m eval_smoke -v
+      - name: Run deterministic red-team regression probes
+        run: python -m pytest tests/redteam/ -v
+      - name: Run compliance control tests
+        run: python -m pytest tests/test_compliance_controls_p16.py -v
       - name: Verify route authentication inventory
         run: python scripts/export_openapi.py --check
       - name: Run production contract suites
@@ -57,17 +63,36 @@ jobs:
           engine/auth/security.py engine/config.py engine/hub_api.py
           engine/orchestra/events.py engine/orchestra/jobs.py
           engine/orchestra/langgraph_conjunction.py engine/rag/store.py
-          engine/rag/retriever.py engine/rag/upload_validator.py
-          engine/security/ws_tickets.py engine/audit/pg_audit.py
+          engine/rag/retriever.py engine/rag/doc_lifecycle.py engine/rag/citations.py engine/rag/reranker.py
+          engine/rag/upload_validator.py engine/connectors/delta_sync.py
+          engine/security/ws_tickets.py engine/security/mfa.py engine/security/jwks_manager.py engine/security/scim_router.py engine/security/kms_envelope.py engine/audit/pg_audit.py
           engine/telemetry.py engine/main.py engine/auth/users.py
+          engine/llm/prompt_registry.py engine/llm/resilient_router.py engine/llm/structured.py
+          engine/llm/semantic_cache.py engine/llm/budget_guard.py engine/orchestra/compactor.py
+          engine/llm/concurrency_guard.py engine/observability/logging.py engine/observability/metrics.py
+          engine/approvals/channels/slack.py engine/approvals/channels/email.py
+          engine/mcp/manifest_guard.py engine/webhooks/dispatcher.py
+          engine/exports/deliverables.py engine/portals/service.py engine/billing/stripe_meters.py
+          engine/voice/pipeline_policy.py
           engine/sales/router_v1.py engine/sales/models.py
-          engine/portable/signatures.py scripts/export_openapi.py
-          scripts/migrate_users_json_to_postgres.py scripts/portable_safe_stop.py
+          engine/portable/signatures.py engine/portable/license_gate.py scripts/export_openapi.py
+          scripts/migrate_users_json_to_postgres.py scripts/portable_safe_stop.py scripts/verify_portable_bundle.py scripts/verify_production_gates.py
           finesse_e2e_production_tests.py tests/test_hash_chained_audit.py
           tests/test_portable_signatures.py tests/test_portable_safe_stop.py
-          tests/test_rag_retriever.py tests/test_route_auth_matrix.py
+          tests/test_rag_retriever.py tests/test_rag_doc_lifecycle.py
+          tests/test_rag_citations.py tests/test_qdrant_security_filters.py
+          tests/test_enterprise_connectors.py
+          tests/test_route_auth_matrix.py
+          tests/test_llmops_p08.py tests/evals/
+          tests/test_observability_p09.py
+          tests/test_workflow_security_p10.py
+          tests/test_product_surfaces_p12.py
+          tests/redteam/
+          engine/compliance/services.py engine/feature_flags.py tests/test_compliance_controls_p16.py
           tests/test_upload_validator.py tests/test_user_storage.py
-          tests/test_ws_tickets.py tests/test_vercel_deployment.py
+          tests/test_ws_tickets.py tests/test_mfa.py tests/test_mfa_auth_flow.py tests/test_jwks_rotation.py tests/test_jwt_jwks_integration.py tests/test_session_revocation.py tests/test_scim_lifecycle.py tests/test_kms_crypto_shredding.py
+          tests/test_vercel_deployment.py
+          tests/test_production_gates.py
       - name: Mypy critical boundary modules
         run: >-
           mypy --ignore-missing-imports --follow-imports=skip

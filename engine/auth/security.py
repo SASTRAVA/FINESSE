@@ -161,25 +161,105 @@ def verify_pw(pw: str, hashed: str) -> bool:
         return False
 
 
-def make_token(email: str, role: str, tier: int, tenant_id: str = "default") -> str:
-    if cfg.JWT_ALGORITHM != "HS256":
-        raise RuntimeError("JWT_ALGORITHM must be HS256")
+def make_token(email: str, role: str, tier: int, tenant_id: str = "default", *,
+               amr: tuple[str, ...] | list[str] = ("pwd",)) -> str:
+    if cfg.JWT_ALGORITHM not in {"HS256", "EDDSA"}:
+        raise RuntimeError("JWT_ALGORITHM must be HS256 or EdDSA")
     if not isinstance(tenant_id, str) or not re.fullmatch(
             r"[a-z0-9][a-z0-9_-]{0,127}", tenant_id):
         raise ValueError("tenant_id must use lowercase letters, digits, hyphens, or underscores")
     now = int(time.time())
     payload = {
         "sub": email, "role": role, "tier": tier, "tenant_id": tenant_id,
-        "iat": now, "exp": now + cfg.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        "amr": list(amr), "iat": now,
+        "jti": secrets.token_urlsafe(18),
+        "exp": now + cfg.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
     }
-    return jwt.encode(payload, cfg.JWT_SECRET, algorithm=cfg.JWT_ALGORITHM)
+    if cfg.JWT_ALGORITHM == "EDDSA":
+        from ..security.jwks_manager import jwks_manager
+        token = jwks_manager.sign(payload)
+    else:
+        token = jwt.encode(payload, cfg.JWT_SECRET, algorithm="HS256")
+    storage.put("auth_sessions", tenant_id, payload["jti"], {
+        "sub": email, "status": "ACTIVE", "expires_at": payload["exp"],
+    })
+    return token
+
+
+def mfa_required_for(tenant_id: str, tier: int) -> bool:
+    if tier >= 3:
+        return True
+    tenant_id = str(tenant_id or "default")
+    policy = storage.get("tenant_identity_settings", tenant_id, tenant_id)
+    return bool(policy and policy.get("require_mfa"))
+
+
+def make_mfa_challenge(user, *, enrollment_required: bool) -> dict:
+    """Create a tenant-bound, five-minute, single-use password-stage challenge."""
+    tenant_id = str(user.tenant_id)
+    now = int(time.time())
+    for _ in range(3):
+        jti = secrets.token_urlsafe(24)
+        expires_at = now + 300
+        record = {"status": "ISSUED", "purpose": "mfa_login", "sub": user.email,
+                  "tenant_id": tenant_id, "expires_at": expires_at,
+                  "enrollment_required": enrollment_required}
+        if storage.put_if_absent("auth_challenges", tenant_id, jti, record):
+            payload = {
+                "sub": user.email, "role": user.role, "tier": user.tier,
+                "tenant_id": tenant_id, "amr": ["pwd"], "mfa_pending": True,
+                "mfa_enrollment_required": enrollment_required,
+                "purpose": "mfa_login", "jti": jti, "iat": now, "nbf": now,
+                "exp": expires_at,
+            }
+            if cfg.JWT_ALGORITHM == "EDDSA":
+                from ..security.jwks_manager import jwks_manager
+                token = jwks_manager.sign(payload)
+            else:
+                token = jwt.encode(payload, cfg.JWT_SECRET, algorithm="HS256")
+            return {"mfa_required": True, "challenge_token": token,
+                    "enrollment_required": enrollment_required, "expires_in": 300}
+    raise RuntimeError("could not reserve an MFA challenge")
+
+
+def build_login_response(user, *, token_field: str = "access_token") -> dict:
+    """Issue password sessions or a step-up challenge according to tenant policy."""
+    if mfa_required_for(user.tenant_id, user.tier):
+        from ..security.mfa import mfa_service
+
+        status = mfa_service.status(user.tenant_id, user.email)
+        challenge = make_mfa_challenge(user, enrollment_required=not status["enrolled"])
+        return {**challenge, "token_type": "bearer", "user": user.public()}
+    return {token_field: make_token(user.email, user.role, user.tier, user.tenant_id),
+            "token_type": "bearer", "user": user.public()}
+
+
+def consume_mfa_challenge(payload: dict) -> bool:
+    """Atomically consume a valid challenge after its factor has been verified."""
+    if (payload.get("purpose") != "mfa_login" or payload.get("mfa_pending") is not True
+            or payload.get("tier", 0) < 1 or "mfa" in payload.get("amr", [])):
+        return False
+    record = storage.take_once("auth_challenges", str(payload.get("tenant_id", "")),
+                               str(payload.get("jti", "")))
+    return bool(record and record.get("purpose") == "mfa_login"
+                and record.get("sub") == payload.get("sub"))
 
 
 def decode_token(token: str) -> Optional[dict]:
     try:
-        if cfg.JWT_ALGORITHM != "HS256":
+        if cfg.JWT_ALGORITHM == "EDDSA":
+            from ..security.jwks_manager import jwks_manager
+            payload = jwks_manager.verify(token)
+        elif cfg.JWT_ALGORITHM == "HS256":
+            payload = jwt.decode(token, cfg.JWT_SECRET, algorithms=["HS256"])
+        else:
             return None
-        return jwt.decode(token, cfg.JWT_SECRET, algorithms=[cfg.JWT_ALGORITHM])
+        tenant_id, jti = payload.get("tenant_id"), payload.get("jti")
+        if tenant_id and jti:
+            revoked = storage.get("revoked_sessions", tenant_id, jti)
+            if revoked and revoked.get("status") == "REVOKED":
+                return None
+        return payload
     except Exception:  # noqa: BLE001
         return None
 
