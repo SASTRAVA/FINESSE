@@ -23,6 +23,7 @@ PUBLIC_REASONS = {
     ("GET", "/voice"): "Static sign-in page; application data APIs enforce authentication.",
     ("GET", "/jarvis"): "Static sign-in page; application data APIs enforce authentication.",
     ("GET", "/command"): "Static sign-in page; application data APIs enforce authentication.",
+    ("GET", "/workspace/{path}"): "Public React workspace shell only; application data APIs enforce authentication.",
     ("GET", "/health"): "Liveness probe returns only a generic online status.",
     ("GET", "/healthz"): "Liveness probe returns only a generic alive status.",
     ("GET", "/readyz"): "Readiness probe returns only process readiness and backend name.",

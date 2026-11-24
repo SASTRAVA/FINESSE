@@ -1,11 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "buildCommand": "cd frontend && npm ci && npm run build",
-  "outputDirectory": "engine/web/react-ui",
-  "rewrites": [
-    { "source": "/workspace", "destination": "/index.html" },
-    { "source": "/workspace/:path*", "destination": "/index.html" }
-  ],
   "redirects": [
     { "source": "/dashboard", "destination": "/workspace/overview", "permanent": true },
     { "source": "/dashboard.html", "destination": "/workspace/overview", "permanent": true },

@@ -281,27 +281,29 @@ link to it. Its typed React/Vite source lives in `frontend/`.
 
 ## Deploy to Vercel (Live Website Quickstart)
 
-Vercel builds and serves the React workspace as static files only. The root
-[vercel.json](vercel.json) contains the build command, SPA rewrites, legacy
-dashboard redirects, and security headers. Deploy the stateful FastAPI API
-separately; this repository does not create that service or its database,
-Redis, and Qdrant resources.
+Vercel serves the React workspace and FastAPI backend from the same project and
+website origin. The root [vercel.json](vercel.json) builds the React assets,
+keeps legacy redirects, and applies security headers; Vercel's FastAPI framework
+loads `app.py`, which exports the application implemented in `engine/main.py`.
 
-1. Import `SASTRAVA/FINESSE` into Vercel and keep the project Root Directory at
-   `.`. Use FastAPI/Python framework detection (or Other); do not configure a
-   second build or output directory in the dashboard because `vercel.json`
-   provides both. Vercel CLI 48.1.8 or newer is required for local `vercel dev`.
-2. Set `VITE_API_BASE_URL` and `VITE_WS_BASE_URL` to the separately deployed
-   backend's HTTPS and WSS origins before the Vercel build. Keep them blank
-   only when the static client and stateful backend share one origin.
+1. Import `SASTRAVA/FINESSE` into Vercel, keep Root Directory at `.`, and set
+   Framework Preset to **FastAPI**. Keep the build command in `vercel.json`; do
+   not set a static output directory. Vercel CLI 48.1.8 or newer is required
+   for local `vercel dev`.
+2. Leave `VITE_API_BASE_URL` and `VITE_WS_BASE_URL` blank for this same-origin
+   deployment. The browser sends API and WebSocket requests to the FastAPI app
+   served by the same Vercel project. Configure these public values only when
+   the backend is intentionally hosted on a different origin.
 3. Configure `CEO_EMAIL`, `CEO_PASSWORD`, `JWT_SECRET`, `KMS_MASTER_KEY`,
    `DATABASE_URL`, `REDIS_URL`, `QDRANT_URL`, model providers, and `CORS_ORIGINS`
-   on the backend host. Do not place backend secrets in Vercel's frontend build
-   environment; `VITE_*` values are public browser configuration.
+   in Vercel's **Production** environment. Keep secrets out of Git; `VITE_*`
+   values are public browser configuration. PostgreSQL, Redis, and Qdrant must
+   be separately provisioned and reachable by the Vercel function.
 
-Validate the static site with `npm run build` in `frontend/`, then test API and
-WebSocket connectivity against the separately hosted backend. Legacy `/dashboard`,
-`/command`, `/jarvis`, and `/voice` URLs redirect to workspace routes.
+Validate with `npm run build` in `frontend/`, then verify `/api/health`,
+`/api/v1/platform/runtime`, and the authenticated API paths through the website
+origin. Legacy `/dashboard`, `/command`, `/jarvis`, and `/voice` URLs redirect
+to workspace routes.
 
 The Vercel client is a single React workspace: its five sections are in-app
 tabs, not separate pages selected by the URL. The standalone FastAPI dashboard
@@ -309,8 +311,9 @@ pages remain part of local/server deployments and are not included in Vercel's
 static React output. See the [frontend pages report](docs/FRONTEND_PAGES_REPORT.md)
 for the complete screen and route inventory.
 
-The static Vercel deployment has no local data filesystem and does not bootstrap
-accounts or seed catalogs. Those stateful operations belong to the API service.
+Vercel function storage is ephemeral. The application reports setup-required
+until its production database, Redis, Qdrant, encryption key, and authentication
+settings are configured; do not treat a successful build as a ready backend.
 
 Local vault content, uploads, user records,
 vector data, audit logs, and credentials are intentionally excluded from this

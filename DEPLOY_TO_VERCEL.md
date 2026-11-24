@@ -27,17 +27,12 @@ Prefer a review branch and pull request when repository branch protection requir
 1. In Vercel, select the SASTRAVA team and choose **Add New → Project → Import Git Repository**.
 2. Select `SASTRAVA/FINESSE` and grant the Vercel GitHub App access to that repository if prompted.
 3. Set **Root Directory** to `.` (repository root). Keep the root directory setting unchanged for all environments.
-4. Use these build settings, which are versioned in `vercel.json`:
-   - Framework preset: **Other** / no framework preset override.
-   - Build command: `cd frontend && npm ci && npm run build`.
-   - Output directory: `engine/web/react-ui`.
-   - Install command: leave automatic/default; the build command installs the frontend lockfile with `npm ci`.
-   - Python Function entrypoint: `api/index.py`; it exports `engine.main:app` as the ASGI application.
-   - Function include glob: `{engine,migrations}/**` so the Python package and SQL migrations are present in the deployed function.
-5. Keep `vercel.json` as the source of truth for rewrites and security headers. `/api/*`, `/hubapi/*`, `/workspace`, `/`, and the dashboard routes are rewritten to `api/index.py`.
-6. Select the `main` production branch. Keep automatic Git deployments enabled. Do not create a second project if the existing FINESSE project is still linked to `SASTRAVA/FINESSE`; verify the project ID and Git connection first.
+4. Set the existing project **Framework Preset** to **FastAPI**. Keep Root Directory at `.`. This project setting is required because the repository contains both a React workspace and a FastAPI app; `app.py` exports the ASGI app implemented in `engine/main.py`.
+5. Keep the build command `cd frontend && npm ci && npm run build`, which is versioned in `vercel.json`. Do not configure a static output directory. The FastAPI app serves the built workspace at `/` and `/workspace`; API endpoints use the same site origin.
+6. Keep `vercel.json` as the source of truth for legacy redirects and security headers. The FastAPI app handles `/api/*`, `/health`, `/workspace/*`, and the legacy local dashboards.
+7. Select the `main` production branch. Keep automatic Git deployments enabled. Do not create a second project if the existing FINESSE project is still linked to `SASTRAVA/FINESSE`; verify the project ID and Git connection first.
 
-Vercel manages the Python runtime for the root `api/` function and installs root `requirements.txt`. Set function memory and maximum duration in Project Settings to values available on the account plan and compatible with the function workload. The repository does not claim long-running worker support on Vercel; durable/background jobs belong in a separately provisioned worker service.
+Vercel manages the Python runtime for the FastAPI app and installs root `requirements.txt`. Set function memory and maximum duration in Project Settings to values available on the account plan and compatible with the function workload. The repository does not claim long-running worker support on Vercel; durable/background jobs belong in a separately provisioned worker service.
 
 ## 3. Set production environment variables
 
@@ -89,7 +84,7 @@ curl -fsS -o /dev/null -w "%{http_code}\n" "$DEPLOYMENT_URL/"
 curl -fsS -o /dev/null -w "%{http_code}\n" "$DEPLOYMENT_URL/workspace"
 ```
 
-Expected results: `/health` returns 200 with `status=online`; `/api/health` returns 200 with `ok=true`; runtime reports `setup_ready=true`; `/` and `/workspace` return 200. An unauthenticated 401 on protected APIs is expected. A 503 from `/api/health` reports missing production environment variables; a failed function/build or startup indicates the Vercel logs should be checked before retrying.
+Expected results: `/health` returns 200 with `status=online`; `/api/v1/platform/runtime` returns JSON; `/` and `/workspace` return the React workspace; and protected APIs return JSON (401 when unauthenticated). `/api/health` returns 200 only when production services and secrets are complete; 503 includes the missing setting names. A non-JSON 404 on API paths means the Vercel project is not using the FastAPI framework preset or the deployment predates the routing change.
 
 Then verify automatic deployments: push a harmless reviewed commit to `main`, confirm a Vercel deployment starts for that exact Git SHA, and confirm its production alias points at the new Ready deployment. Do not infer hook health from a manually created deployment.
 

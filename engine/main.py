@@ -1290,11 +1290,24 @@ async def ws(websocket: WebSocket, ticket: str = ""):
 # ---------- dashboard ----------
 @app.get("/", response_class=HTMLResponse)
 async def landing():
-    """JARVIS is the front door now."""
+    """Serve the operator workspace on Vercel and JARVIS on local servers."""
+    if cfg.IS_VERCEL:
+        workspace = _WEB / "react-ui" / "index.html"
+        if workspace.exists():
+            return HTMLResponse(workspace.read_text(encoding="utf-8"))
     html = _WEB / "jarvis.html"
     if html.exists():
         return HTMLResponse(html.read_text(encoding="utf-8"))
     return HTMLResponse("<h1>SASTRAVA FINESSE</h1><p>jarvis.html missing</p>")
+
+
+@app.get("/workspace/{path:path}", response_class=HTMLResponse)
+async def workspace_spa_fallback(path: str):
+    """Return the React entry document for workspace deep links."""
+    workspace = _WEB / "react-ui" / "index.html"
+    if workspace.exists():
+        return HTMLResponse(workspace.read_text(encoding="utf-8"))
+    return HTMLResponse("FINESSE workspace is not built", status_code=503)
 
 
 @app.get("/dashboard", response_class=HTMLResponse)

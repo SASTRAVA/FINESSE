@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import asyncio
 import os
 import re
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from engine.config import _cors_origins, _storage_paths
@@ -15,19 +17,25 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 class VercelDeploymentTests(unittest.TestCase):
-    def test_vercel_deploys_static_spa_and_never_routes_to_serverless_backend(self):
+    def test_vercel_builds_frontend_and_routes_requests_to_fastapi(self):
         config = json.loads((ROOT / "vercel.json").read_text(encoding="utf-8"))
-        serialized = json.dumps(config)
-        self.assertNotIn("api/index.py", serialized)
-        self.assertNotIn("functions", config)
-        self.assertEqual(config["outputDirectory"], "engine/web/react-ui")
-        self.assertTrue(any(rule.get("destination") == "/index.html"
-                            for rule in config["rewrites"]))
+        self.assertIn("cd frontend", config["buildCommand"])
+        self.assertNotIn("outputDirectory", config)
+        self.assertNotIn("rewrites", config)
+        self.assertTrue((ROOT / "app.py").is_file())
         headers = {header["key"]: header["value"]
                    for rule in config["headers"] for header in rule["headers"]}
         self.assertIn("max-age=63072000", headers["Strict-Transport-Security"])
         self.assertIn("frame-ancestors 'none'", headers["Content-Security-Policy"])
         self.assertNotIn("unsafe-eval", headers["Content-Security-Policy"])
+
+    def test_vercel_root_serves_react_workspace(self):
+        from engine.main import cfg, landing
+
+        with patch.object(cfg, "IS_VERCEL", True):
+            response = asyncio.run(landing())
+        self.assertIn("<title>FINESSE operator workspace</title>",
+                      response.body.decode("utf-8"))
 
     def test_vercel_asgi_entrypoint_routes_and_serves_ui(self):
         from fastapi.testclient import TestClient
@@ -41,6 +49,7 @@ class VercelDeploymentTests(unittest.TestCase):
             self.assertEqual(client.get("/workspace").status_code, 200)
             workspace = client.get("/workspace/")
             self.assertEqual(workspace.status_code, 200)
+            self.assertEqual(client.get("/workspace/overview").status_code, 200)
             script = re.search(r'src="([^"]+\.js)"', workspace.text)
             self.assertIsNotNone(script, "workspace HTML must reference a JS bundle")
             self.assertEqual(client.get(script.group(1)).status_code, 200)
@@ -51,8 +60,12 @@ class VercelDeploymentTests(unittest.TestCase):
             self.assertEqual(client.get("/api/health").status_code, 200)
             self.assertEqual(client.get("/api/v1/services").status_code, 401)
             self.assertEqual(client.get("/api/sastrava/catalog").status_code, 401)
-            # This ASGI compatibility shim remains directly testable, while the
-            # deployed Vercel config is static-only and never forwards API traffic.
+
+    def test_fastapi_framework_entrypoint_exports_the_production_app(self):
+        from app import app as root_app
+        from api.index import app as api_app
+
+        self.assertIs(root_app, api_app)
 
     def test_vercel_defaults_and_domains_are_derived_without_touching_disk(self):
         data, vault = _storage_paths({"VERCEL": "1"})
@@ -249,15 +262,8 @@ with TestClient(app) as client:
         config = json.loads((ROOT / "vercel.json").read_text(encoding="utf-8"))
         self.assertEqual(config["buildCommand"],
                          "cd frontend && npm ci && npm run build")
-        self.assertEqual(config["outputDirectory"], "engine/web/react-ui")
-        rewrites = config["rewrites"]
-        self.assertTrue(all("api/index.py" not in item.get("destination", "")
-                            for item in rewrites))
-        self.assertTrue(any(item.get("destination") == "/index.html"
-                            for item in rewrites))
-        rewrite_sources = {item["source"] for item in rewrites}
-        self.assertNotIn("/api/:path*", rewrite_sources)
-        self.assertNotIn("/hubapi/:path*", rewrite_sources)
+        self.assertNotIn("outputDirectory", config)
+        self.assertNotIn("rewrites", config)
         header_names = {
             header["key"]
             for rule in config["headers"]

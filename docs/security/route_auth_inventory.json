@@ -1875,6 +1875,14 @@
       "path": "/voice",
       "public_reason": "Static sign-in page; application data APIs enforce authentication.",
       "security": []
+    },
+    {
+      "authenticated": false,
+      "method": "GET",
+      "operation_id": "workspace_spa_fallback_workspace__path__get",
+      "path": "/workspace/{path}",
+      "public_reason": "Public React workspace shell only; application data APIs enforce authentication.",
+      "security": []
     }
   ],
   "openapi_version": "3.1.0",
