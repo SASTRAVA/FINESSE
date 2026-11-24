@@ -1,15 +1,14 @@
 # FINESSE Frontend Pages and Deployment Report
 
 **Audit date:** 2026-11-24
-**Last pushed revision inspected:** `8443e847810a0c80145a51aee2d4bfaa7de25da6` (`main`)
+**Implementation revision:** `d58e18923bfc37c057d8dc231d5f94f4c6e076f6` (`main`)
 **Production URL checked:** <https://finesse-theta.vercel.app/>
 
 ## Deployment finding
 
-The Vercel project is connected to `SASTRAVA/FINESSE` and deploys `main`. Its
-previous deployment served the React site but returned 404 for the backend API.
-The Vercel project was set to the **Other** framework with a static output
-directory, so requests were not routed through the FastAPI app.
+The Vercel project is connected to `SASTRAVA/FINESSE` and deploys `main`. The
+project framework is now **FastAPI**, with the stale static output-directory
+override removed. The implementation is pushed to `main` as revision `d58e189`.
 
 The Vite public base is `/`. The FastAPI app serves the React workspace at the
 website root on Vercel and at `/workspace`; its `/assets` mount serves the
@@ -17,10 +16,10 @@ compiled JavaScript and CSS. Vercel must use the FastAPI framework preset and
 must not force a static output directory, so the same deployment routes
 `/api/*` requests into the app.
 
-The previous static deployment served the corrected HTML and assets, but its
-API paths returned 404. The current code change routes these through FastAPI;
-production verification is pending the Vercel deployment with the FastAPI
-framework preset.
+Production checks now confirm `/` and `/workspace/overview` return the React
+workspace document, the compiled JavaScript asset returns 200 with a JavaScript
+content type, and `/api/v1/platform/runtime` returns JSON with HTTP 200. This
+confirms the website and backend are routed on the same Vercel origin.
 
 The Vercel project currently has the authentication variables, but the
 production encryption key, PostgreSQL, Redis, and Qdrant settings are not
@@ -29,10 +28,10 @@ configured. The API can be routed on the same origin, but it will report
 those dependencies are provisioned. Same-origin `VITE_API_BASE_URL` and
 `VITE_WS_BASE_URL` stay blank; never place secrets in `VITE_*` variables.
 
-The current live site confirms the old deployment gap: requests to
-`/api/v1/platform/runtime` and `/api/health` return 404. The next deployment
-must route them to FastAPI; after routing, missing production dependencies
-should be reported as structured setup status rather than a 404.
+`/api/health` currently returns structured JSON with HTTP 503 and lists the
+missing production settings. Protected API requests return JSON 401 when no
+session is supplied. The frontend and backend routes are live; production data
+services and their secret settings remain a separate readiness requirement.
 
 ## Pages available in the React workspace
 
@@ -80,7 +79,7 @@ deployments; Vercel redirects their legacy names into the React workspace.
 Browser
   └─ Vercel FastAPI app (app.py → engine.main:app)
        ├─ / → React workspace document
-       ├─ /assets/* and /workspace/* → built React files
+       ├─ /assets/* → built React files; /workspace/* → workspace shell fallback
        ├─ /api/*, /health, /readyz → FastAPI routes
        └─ legacy aliases → /workspace/*
             └─ frontend/src/main.tsx
@@ -112,7 +111,7 @@ Redis, Qdrant, KMS, and authentication settings before the API reports ready.
 
 ## Verification scope and remaining work
 
-The remote dashboard confirmed repository linkage and a Ready deployment. The
-public frontend and assets are live, but backend routes remain 404 until the
-FastAPI preset deployment completes. The production resources listed above are
-also required before the backend can report ready.
+The Vercel dashboard confirmed repository linkage and the FastAPI preset. The
+public frontend, assets, and JSON backend routes are live from the same origin.
+Runtime readiness remains false until the production resources listed above
+are provisioned and configured.
