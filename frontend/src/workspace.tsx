@@ -107,13 +107,16 @@ export function Workspace() {
 
   useEffect(() => { void load(tab); }, [load, tab]);
 
-  async function submit(event: FormEvent<HTMLFormElement>, endpoint: string, body: Record<string, JsonValue>) {
+  async function submit(
+    event: FormEvent<HTMLFormElement>, endpoint: string,
+    body: Record<string, JsonValue>, method: "POST" | "PUT" = "POST",
+  ) {
     event.preventDefault();
     setBusy(true);
     setError("");
     setNotice("");
     try {
-      const result = await request(endpoint, { method: "POST", body: JSON.stringify(body) });
+      const result = await request(endpoint, { method, body: JSON.stringify(body) });
       setNotice(JSON.stringify(result, null, 2));
       await load(tab);
     } catch (cause) {
@@ -390,7 +393,7 @@ function SalesView({ data, submit, busy }: ViewProps) {
       await submit(event, "/api/v1/settings/provider-secrets", {
         name: String(new FormData(form).get("name") ?? ""),
         secret: String(new FormData(form).get("secret") ?? ""),
-      });
+      }, "PUT");
       form.reset();
     }}>
       <h2>Encrypted provider secret</h2>
@@ -496,8 +499,8 @@ function CalendarView({ data, submit, busy }: ViewProps) {
       <h2>Create local calendar invite</h2>
       <label htmlFor="meeting-subject">Subject</label><input id="meeting-subject" name="subject" required maxLength={200} />
       <label htmlFor="attendee">Attendee email</label><input id="attendee" name="attendee" type="email" required />
-      <label htmlFor="start">Start (timezone required)</label><input id="start" name="start" type="datetime-local" required />
-      <label htmlFor="end">End (timezone required)</label><input id="end" name="end" type="datetime-local" required />
+      <label htmlFor="start">Start (your local time)</label><input id="start" name="start" type="datetime-local" required />
+      <label htmlFor="end">End (your local time)</label><input id="end" name="end" type="datetime-local" required />
       <label htmlFor="calendar-contact">Consenting contact ID (external sync only)</label><input id="calendar-contact" name="contact_id" />
       <label htmlFor="calendar-idempotency">Idempotency key (external sync only)</label><input id="calendar-idempotency" name="idempotency_key" maxLength={200} />
       <label className="check"><input type="checkbox" name="sync_confirmed" /> I explicitly request external calendar sync.</label>
@@ -511,6 +514,9 @@ function CalendarView({ data, submit, busy }: ViewProps) {
 
 type ViewProps = {
   data: Record<string, JsonValue>;
-  submit: (event: FormEvent<HTMLFormElement>, endpoint: string, body: Record<string, JsonValue>) => Promise<void>;
+  submit: (
+    event: FormEvent<HTMLFormElement>, endpoint: string,
+    body: Record<string, JsonValue>, method?: "POST" | "PUT",
+  ) => Promise<void>;
   busy: boolean;
 };

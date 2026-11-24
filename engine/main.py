@@ -1610,6 +1610,11 @@ else:
 _WORKSPACE_DIST = _WEB / "react-ui"
 if (_WORKSPACE_DIST / "index.html").exists():
     from fastapi.staticfiles import StaticFiles
+    if (_WORKSPACE_DIST / "assets").exists():
+        # Vite emits domain-root asset URLs so the same build works on Vercel
+        # and under FastAPI's /workspace mount.
+        app.mount("/assets", StaticFiles(
+            directory=str(_WORKSPACE_DIST / "assets")), name="workspace-assets")
     app.mount("/workspace", StaticFiles(
         directory=str(_WORKSPACE_DIST), html=True), name="workspace")
 

@@ -15,6 +15,8 @@ orchestrator, a FastAPI service, and browser dashboards.
 > security review boundary and unresolved production checks.
 > The implementation-aligned API contract is in [PRD.md](PRD.md). See
 > [DEPLOY_TO_VERCEL.md](DEPLOY_TO_VERCEL.md) for Vercel settings and release checks.
+> [docs/FRONTEND_PAGES_REPORT.md](docs/FRONTEND_PAGES_REPORT.md) for the full
+> frontend screen inventory, route behavior, architecture, and deployment finding.
 
 ## What it does
 
@@ -300,6 +302,12 @@ Redis, and Qdrant resources.
 Validate the static site with `npm run build` in `frontend/`, then test API and
 WebSocket connectivity against the separately hosted backend. Legacy `/dashboard`,
 `/command`, `/jarvis`, and `/voice` URLs redirect to workspace routes.
+
+The Vercel client is a single React workspace: its five sections are in-app
+tabs, not separate pages selected by the URL. The standalone FastAPI dashboard
+pages remain part of local/server deployments and are not included in Vercel's
+static React output. See the [frontend pages report](docs/FRONTEND_PAGES_REPORT.md)
+for the complete screen and route inventory.
 
 The static Vercel deployment has no local data filesystem and does not bootstrap
 accounts or seed catalogs. Those stateful operations belong to the API service.
