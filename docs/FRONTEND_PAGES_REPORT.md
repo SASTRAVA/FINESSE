@@ -1,7 +1,8 @@
 # FINESSE Frontend Pages and Deployment Report
 
 **Audit date:** 2026-11-24
-**Repository revision inspected:** `8193062ac309ec9cbefbf48a1e91b98eb593ef65` (`main`)
+**Pre-fix revision inspected:** `8193062ac309ec9cbefbf48a1e91b98eb593ef65` (`main`)  
+**Fix pushed to:** `4322fef6e2b1c4accf43e4f7cf617a609121e5fa` (`main`)  
 **Production URL checked:** <https://finesse-theta.vercel.app/>
 
 ## Deployment finding
@@ -19,6 +20,12 @@ The Vite public base is now `/`, matching the configured output directory
 for direct workspace URLs. FastAPI also serves the generated `/assets` folder
 at the root so the same bundle remains usable at `/workspace/` in local/server
 deployments. This corrects the observed blank-page cause.
+
+After the push, the production root serves the corrected HTML, the new JavaScript
+bundle (`/assets/index-DemWlrd4.js`) returns HTTP 200 with a JavaScript content
+type, and the CSS bundle returns HTTP 200 with a CSS content type. Direct
+`/workspace/overview` also returns the SPA document. These checks confirm the
+assets needed to render the React page are available at the deployed URLs.
 
 Vercel serves the frontend as static files. The FastAPI service, database,
 Redis, Qdrant, and their secrets are not provisioned by this static site. Set
@@ -106,10 +113,10 @@ configured Vercel static output directory.
 
 ## Verification scope and remaining work
 
-The remote dashboard confirmed repository linkage and a Ready deployment, while
-the public URL rendered blank before the asset-base fix. The corrected Vite
-build must be deployed before the public URL can be rechecked against the new
-revision. The external backend origin and its runtime configuration were not
-verified as part of this static frontend correction. The React workspace is
-renderable independently of that service, but its authenticated features need
-the separately hosted API and WebSocket services described above.
+The remote dashboard confirmed repository linkage and a Ready deployment. The
+public URL rendered blank before the asset-base fix; after the push, its HTML
+and both compiled assets returned successful responses. The external backend
+origin and its runtime configuration were not verified as part of this static
+frontend correction. The React workspace is renderable independently of that
+service, but its authenticated features need the separately hosted API and
+WebSocket services described above.
