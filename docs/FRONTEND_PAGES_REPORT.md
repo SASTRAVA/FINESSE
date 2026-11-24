@@ -1,8 +1,8 @@
 # FINESSE Frontend Pages and Deployment Report
 
 **Audit date:** 2026-11-24
-**Pre-fix revision inspected:** `8193062ac309ec9cbefbf48a1e91b98eb593ef65` (`main`)  
-**Fix pushed to:** `4322fef6e2b1c4accf43e4f7cf617a609121e5fa` (`main`)  
+**Pre-fix revision inspected:** `8193062ac309ec9cbefbf48a1e91b98eb593ef65` (`main`)
+**Fix pushed to:** `4322fef6e2b1c4accf43e4f7cf617a609121e5fa` (`main`)
 **Production URL checked:** <https://finesse-theta.vercel.app/>
 
 ## Deployment finding
