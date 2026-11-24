@@ -68,7 +68,9 @@ export function Workspace() {
       try {
         payload = JSON.parse(raw.body) as RecordData;
       } catch {
-        throw new Error("Server returned a non-JSON response");
+        throw new Error(
+          "FINESSE API is unavailable or returned a non-JSON response. Configure VITE_API_BASE_URL for the deployed backend and redeploy.",
+        );
       }
     }
     if (!raw.response.ok) {
@@ -272,7 +274,7 @@ export function Workspace() {
 }
 
 function runtimeLabel(runtime: RuntimeInfo | null): string {
-  if (!runtime) return "Environment status unavailable";
+  if (!runtime) return "API unavailable · check backend connection";
   const environment = runtime.is_vercel ? "Vercel" : runtime.environment;
   return `${environment} · ${runtime.setup_ready ? "ready" : "setup required"} · ${
     runtime.sales_dry_run ? "dry-run" : "live providers enabled"}`;

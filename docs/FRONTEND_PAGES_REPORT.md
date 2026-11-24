@@ -35,6 +35,12 @@ and reachable, the page can render but sign-in, runtime status, data loading,
 and workspace actions cannot work. Do not put backend credentials in `VITE_*`
 variables.
 
+The current live site confirms this remaining configuration gap: requests to
+`/api/v1/platform/runtime`, `/api/health`, and `/api/v1/auth/login` return 404
+responses from the static deployment. The sign-in form consequently reports
+that it did not receive JSON. The frontend now explains that the backend URL
+must be configured instead of showing only a generic parsing error.
+
 ## Pages available in the React workspace
 
 The React app is a single-page application, not a route-per-screen application.
