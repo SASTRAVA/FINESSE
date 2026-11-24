@@ -106,7 +106,11 @@ async def sales_login(body: LoginIn):
     try:
         return build_login_response(account_user)
     except RuntimeError as exc:
-        raise HTTPException(503, "MFA service is unavailable") from exc
+        raise HTTPException(
+            503,
+            "MFA could not start because production authentication storage is unavailable. "
+            "Check /api/health for missing production settings.",
+        ) from exc
 
 
 @router.post("/auth/refresh")

@@ -200,7 +200,7 @@ assert users.get(cfg.CEO_EMAIL) is not None, "CEO bootstrap was blocked by backe
 with TestClient(app) as client:
     login = client.post("/api/v1/auth/login", json={
         "email": cfg.CEO_EMAIL, "password": cfg.CEO_PASSWORD})
-    assert login.status_code == 503 and "MFA service is unavailable" in login.text, (
+    assert login.status_code == 503 and "/api/health" in login.text, (
         f"incomplete production storage must fail closed for L4 MFA: {login.status_code}")
     health = client.get("/api/health")
     assert health.status_code == 503, "partial backend must remain not-ready"
